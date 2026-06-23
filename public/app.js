@@ -106,7 +106,7 @@ const TABS = [
       { type:'list', title:'Recent activity', link:'Timeline', items:[
         { icon:'✅', p1:'2019 Audi Q5 published', p2:'Studio · 4 min ago', meta:'Day 0' },
         { icon:'📅', p1:'Test drive booked — M. Rivera', p2:'Vini Sales · 12 min ago', meta:'Sat 3pm' },
-        { icon:'💳', p1:'Invoice #4821 paid', p2:'Billing · 1 hr ago', meta:'$2,400' },
+        { icon:'💳', p1:'Invoice <span class="mono">#4821</span> paid', p2:'Billing · 1 hr ago', meta:'<span class="mono">$2,400</span>' },
       ]},
     ],
   },
@@ -376,13 +376,13 @@ const TABS = [
     ],
     panels: [
       { type:'progress', span:true, title:'Usage this cycle', link:'Details', rows:[
-        { label:'Studio vehicles', value:'278 / 350', pct:79, acc:true },
-        { label:'Vini conversations', value:'6,420 / 10,000', pct:64 },
-        { label:'Seats', value:'14 / 16', pct:88 },
+        { label:'Studio vehicles', value:'<span class="mono">278 / 350</span>', pct:79, acc:true },
+        { label:'Vini conversations', value:'<span class="mono">6,420 / 10,000</span>', pct:64 },
+        { label:'Seats', value:'<span class="mono">14 / 16</span>', pct:88 },
       ]},
       { type:'list', title:'Recent invoices', link:'All invoices', items:[
-        { icon:'🧾', p1:'Invoice #4821', p2:'Jun 1 · Comprehensive', tag:'Paid', tagk:'g' },
-        { icon:'🧾', p1:'Invoice #4760', p2:'May 1 · Comprehensive', tag:'Paid', tagk:'g' },
+        { icon:'🧾', p1:'Invoice <span class="mono">#4821</span>', p2:'Jun 1 · Comprehensive', tag:'Paid', tagk:'g' },
+        { icon:'🧾', p1:'Invoice <span class="mono">#4760</span>', p2:'May 1 · Comprehensive', tag:'Paid', tagk:'g' },
       ]},
       { type:'callout', title:'Plan', items:[
         { icon:'⭐', h:'Comprehensive', p:'Studio AI + Vini Sales & Service, 350 vehicles, 16 seats', btn:'Upgrade', btnk:'buy' },
