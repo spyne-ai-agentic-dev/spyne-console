@@ -3,20 +3,28 @@
 import { useState } from "react"
 import { TABS, railHTML, submenuHTML, contentHTML, crumbsHTML } from "./console-data"
 import { ActionItemsConsole } from "@/components/max-2/sales/console-v2/action-items"
+import Reports from "./reports/Reports"
 
 export default function Console() {
   const [tab, setTab] = useState<string>("home")
   const [sub, setSub] = useState<Record<string, number>>({})
   const [navCollapsed, setNavCollapsed] = useState(false)
+  // agent pre-selected when the user clicks an agent on the reporting Overview → jumps to Reports
+  const [reportAgent, setReportAgent] = useState<string | undefined>(undefined)
 
   const current = TABS.find((t: any) => t.id === tab) ?? TABS[0]
   const curSub = sub[tab] ?? 0
 
-  // Action Items tab (ported from intelligent-console-v2 sales) — shown for both
-  // Sales → Action Items and Service → Action Items.
   const activeSubLabel = current.secondary?.[curSub]?.label
+
+  // Action Items tab (ported from intelligent-console-v2 sales)
   const showActionItems =
     (current.id === "sales" || current.id === "service") && activeSubLabel === "Action Items"
+
+  // Sales / Service · Overview & Reports sub-tabs powered by the React reporting module
+  const isReportTab = current.id === "sales" || current.id === "service"
+  const reportView = activeSubLabel === "Reports" ? "reports" : activeSubLabel === "Overview" ? "overview" : null
+  const showReports = isReportTab && reportView !== null && !showActionItems
 
   return (
     <div className="app">
@@ -107,11 +115,22 @@ export default function Console() {
         </header>
         {showActionItems ? (
           <main className="content" key={`${tab}-action-items`} style={{ padding: 0 }}>
-            {/* .console-v2-sales-root scopes the Sales Console V2 design system (matches
-                intelligent-console-v2's sales experience wrapper) */}
             <div className="console-v2-sales-root w-full min-w-0 bg-spyne-page" style={{ minHeight: "100%" }}>
               <ActionItemsConsole />
             </div>
+          </main>
+        ) : showReports ? (
+          <main className="content" key={`${tab}-${activeSubLabel}`} style={{ padding: 0 }}>
+            <Reports
+              dept={current.id === "sales" ? "Sales" : "Service"}
+              view={reportView as "overview" | "reports"}
+              initialAgent={reportAgent}
+              onOpenAgent={(id) => {
+                const idx = current.secondary.findIndex((s: any) => s.label === "Reports")
+                setReportAgent(id)
+                if (idx >= 0) setSub((s) => ({ ...s, [tab]: idx }))
+              }}
+            />
           </main>
         ) : (
           <main className="content" key={tab} dangerouslySetInnerHTML={{ __html: contentHTML(current) }} />
