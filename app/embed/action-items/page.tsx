@@ -30,7 +30,8 @@ function ActionItemsEmbed() {
 
   return (
     <div className="console-v2-sales-root w-full min-w-0 bg-spyne-page" style={{ minHeight: "100vh" }}>
-      <ActionItemsConsole />
+      {/* read-only: GET-only embed — write CTAs (Create/Resolve/Assign/Incorrect) hidden */}
+      <ActionItemsConsole readOnly />
     </div>
   )
 }

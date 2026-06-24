@@ -66,7 +66,7 @@ function customerName(customerId, item) {
   return item?.customer_name ?? CUSTOMERS[customerId]?.name ?? humanize(customerId)
 }
 
-export function ActionItemsConsole() {
+export function ActionItemsConsole({ readOnly = false }) {
   const [items, setItems] = useState(ACTION_ITEMS)
   const [scope, setScope] = useState('manager') // 'manager' | 'mine'
   const [tab, setTab] = useState('unresolved')
@@ -248,9 +248,11 @@ export function ActionItemsConsole() {
           <button onClick={() => setRulesOpen(true)} className="spyne-btn-ghost !h-9 !text-[12.5px]" title="Action-item rules & routing">
             <MaterialSymbol name="settings" size={16} /> Rules
           </button>
-          <button onClick={() => setCreateOpen(true)} className="spyne-btn-primary !h-9 !text-[12.5px]">
-            <MaterialSymbol name="add_task" size={16} /> Create action item
-          </button>
+          {!readOnly && (
+            <button onClick={() => setCreateOpen(true)} className="spyne-btn-primary !h-9 !text-[12.5px]">
+              <MaterialSymbol name="add_task" size={16} /> Create action item
+            </button>
+          )}
           <div className="inline-flex rounded-lg border border-spyne-border bg-spyne-surface p-0.5">
             {[['manager', 'Manager', 'groups'], ['mine', 'My queue', 'person']].map(([id, label, icon]) => (
               <button key={id} onClick={() => { setScope(id); resetSelection() }} className={cn('spyne-focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition-colors', scope === id ? 'bg-spyne-primary text-white' : 'text-spyne-text-secondary hover:text-spyne-text-primary')}>
@@ -327,6 +329,7 @@ export function ActionItemsConsole() {
                     onSelect={() => { setSelectedGroup(g.key); setSelectedItemId(null) }}
                     onToggle={() => setExpanded((m) => ({ ...m, [g.key]: !m[g.key] }))}
                     onResolveAll={() => resolveAll(g.items)}
+                    readOnly={readOnly}
                     onOpenSidebar={(cid) => setSidebarCustomer(cid)}
                   />
                 ))
@@ -364,6 +367,7 @@ export function ActionItemsConsole() {
                   onMarkIncorrect={markIncorrect}
                   onAskAssign={setAssigningFor}
                   onAssign={assign}
+                  readOnly={readOnly}
                   onOpenSidebar={setSidebarCustomer}
                 />
               )}
@@ -384,7 +388,7 @@ export function ActionItemsConsole() {
       {sidebarCustomer && (
         <CustomerSidebar customerId={sidebarCustomer} items={items} onClose={() => setSidebarCustomer(null)} />
       )}
-      {createOpen && (
+      {createOpen && !readOnly && (
         <CreateActionItemModal onCreate={(item) => { setItems((p) => [item, ...p]); flash('Action item created'); }} onClose={() => setCreateOpen(false)} />
       )}
       {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
@@ -546,7 +550,7 @@ function CustomerNameButton({ customerId, item, onOpen, size = 13 }) {
 
 /* ── Left: grouped row (Customer / Intent / Assignee) ────────────── */
 
-function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onResolveAll, onOpenSidebar }) {
+function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onResolveAll, onOpenSidebar, readOnly }) {
   const its = group.items
   const multi = its.length > 1
   const worst = its[0]
@@ -622,7 +626,7 @@ function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onReso
               </li>
             ))}
           </ul>
-          {sameCustomer && (
+          {!readOnly && sameCustomer && (
             <button onClick={(e) => { e.stopPropagation(); onResolveAll() }} className="spyne-focus-ring mt-2 inline-flex items-center gap-1 rounded text-[11.5px] font-semibold" style={{ color: 'var(--spyne-primary)' }}>
               <MaterialSymbol name="done_all" size={14} /> Resolve all {its.length}
             </button>
@@ -665,7 +669,7 @@ function FlatItemRow({ item, active, highlight, onSelect, onOpenSidebar }) {
 
 /* ── Right: detail pane ──────────────────────────────────────────── */
 
-function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar }) {
+function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, readOnly }) {
   const multi = items.length > 1
   // The pane can be heterogeneous (Intent / Assignee group spans customers).
   const sameCustomer = items.every((i) => i.customer_id === customerId)
@@ -690,7 +694,7 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
           <div className="flex items-center gap-2">{title}</div>
           <p className="mt-0.5 text-[11px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{subtitle}</p>
         </div>
-        {multi && sameCustomer && (
+        {!readOnly && multi && sameCustomer && (
           <button onClick={onResolveAll} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="done_all" size={14} /> Resolve all {items.length}</button>
         )}
       </div>
@@ -715,6 +719,7 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
             onAskAssign={() => { onAskIncorrect(null); onCancelResolve(); onAskAssign(it.action_item_id) }}
             onCancelAssign={() => onAskAssign(null)}
             onAssign={(userId) => onAssign(it.action_item_id, userId)}
+            readOnly={readOnly}
           />
         ))}
       </div>
@@ -763,7 +768,7 @@ function ActivityTrail({ item }) {
 
 /* ── Right: item card ────────────────────────────────────────────── */
 
-function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign }) {
+function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly }) {
   const intent = INTENT_TAXONOMY[item.intent_id]
   const past = isPastSla(item)
   return (
@@ -816,7 +821,7 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
       </div>
 
       {/* Actions */}
-      {askingResolve ? (
+      {!readOnly && (askingResolve ? (
         <ResolvePicker onResolve={onResolve} onCancel={onCancelResolve} />
       ) : askingAssign ? (
         <div className="border-t border-spyne-border px-4 py-3">
@@ -847,7 +852,7 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           <button onClick={onAskAssign} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="person_add" size={14} /> Assign</button>
           <button onClick={onAskIncorrect} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="flag" size={14} /> Incorrect</button>
         </div>
-      )}
+      ))}
     </div>
   )
 }
