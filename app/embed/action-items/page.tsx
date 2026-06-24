@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { ActionItemsConsole } from "@/components/max-2/sales/console-v2/action-items"
-import { fetchActionItems } from "@/components/max-2/sales/console-v2/action-items/be-client"
+import { fetchActionItems, fetchActionItemsViaProxy } from "@/components/max-2/sales/console-v2/action-items/be-client"
 import type { ActionItem } from "@/components/max-2/sales/console-v2/action-items/data"
 
 /**
@@ -32,10 +32,15 @@ function ActionItemsEmbed() {
     let cancelled = false
     ;(async () => {
       try {
-        const live = await fetchActionItems() // null when no scope
+        // Prod iframe passes a token in the URL → fetch the backend directly (be-client).
+        // Localhost/dev (no token) → use the same-origin server proxy (/api/action-items)
+        // which holds the creds in .env.local: no CORS, token never reaches the client.
+        const live = scope.token
+          ? await fetchActionItems()
+          : await fetchActionItemsViaProxy(scope.enterpriseId || undefined, scope.teamId || undefined)
         if (!cancelled && live && live.length) setItems(live)
       } catch {
-        // any GET failure → keep the mock fallback (items stays undefined)
+        // any failure → keep the mock fallback (items stays undefined)
       }
     })()
     return () => {

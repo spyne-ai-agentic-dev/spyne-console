@@ -45,3 +45,24 @@ export async function fetchActionItems(): Promise<ActionItem[] | null> {
 
   return raw.map(mapBeItem)
 }
+
+/**
+ * LOCAL/DEV: fetch via the same-origin server proxy (`/api/action-items`) — no CORS, token
+ * stays server-side (.env.local). Used by the embed when no token is present in the URL.
+ */
+export async function fetchActionItemsViaProxy(enterpriseId?: string, teamId?: string): Promise<ActionItem[]> {
+  const url = new URL("/api/action-items", window.location.origin)
+  if (enterpriseId) url.searchParams.set("enterpriseId", enterpriseId)
+  if (teamId) url.searchParams.set("teamId", teamId)
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" }, cache: "no-store" })
+  if (!res.ok) throw new Error(`proxy /api/action-items → ${res.status}`)
+  const body = await res.json()
+  const raw: any[] = Array.isArray(body?.data)
+    ? body.grouped
+      ? body.data.flatMap((g: any) => g?.actionItems ?? [])
+      : body.data
+    : []
+  Object.assign(CUSTOMERS, customersFromBe(raw))
+  Object.assign(USERS, usersFromBe(raw))
+  return raw.map(mapBeItem)
+}
