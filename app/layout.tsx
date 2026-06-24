@@ -1,8 +1,13 @@
 import type React from "react"
 import type { Metadata } from "next"
-// Spyne Console (legacy design system, ported). The Tailwind v4 globals.css remains in
-// the repo for the future intelligent-console-v2 code push; this standalone console uses
-// its own self-contained stylesheet for visual fidelity with the original.
+// Tailwind v4 + design tokens (powers the ported Action Items console). Loaded into
+// Tailwind's @layer base, so the unlayered console.css below still governs the legacy
+// shell (rail / submenu / panels) without being reset by Tailwind preflight.
+import "./globals.css"
+// Sales Console V2 component styles (scoped under `.console-v2-sales-root`) — powers the
+// ported Action Items console. Safe to load globally; nothing outside that root is affected.
+import "@/styles/console-v2-sales.css"
+// Spyne legacy design system — the console shell's own stylesheet.
 import "./console.css"
 
 export const metadata: Metadata = {
@@ -16,7 +21,13 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <link
+          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
+          rel="stylesheet"
+        />
+      </head>
       <body>{children}</body>
     </html>
   )

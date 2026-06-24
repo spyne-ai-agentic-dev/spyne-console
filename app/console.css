@@ -121,8 +121,31 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; color: var(--text-default); letter
   background: var(--surface-canvas);
   border-right: 1px solid var(--border-default);
   display: flex; flex-direction: column;
+  position: relative; overflow: hidden;
+}
+.submenu-scroll {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
   padding: 22px 14px 16px; overflow-y: auto;
 }
+/* Collapse / expand controls for the secondary nav */
+.nav-collapse-btn {
+  position: absolute; top: 16px; right: 12px; z-index: 2;
+  display: inline-grid; place-items: center; width: 28px; height: 28px;
+  border-radius: var(--r-control-sm); border: 1px solid var(--border-default);
+  background: var(--surface-default); color: var(--icon-subtle); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.nav-collapse-btn:hover { background: var(--surface-sunken); color: var(--text-default); }
+.nav-collapse-btn svg { width: 16px; height: 16px; }
+.topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.nav-expand-btn {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: var(--r-control-sm); border: 1px solid var(--border-default);
+  background: var(--surface-default); color: var(--icon-subtle); cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.nav-expand-btn:hover { background: var(--surface-sunken); color: var(--text-default); }
+.nav-expand-btn svg { width: 16px; height: 16px; }
 .sub-title { font-size: 20px; font-weight: 600; padding: 0 8px; }
 .sub-sub { font-size: 13px; color: var(--text-muted); padding: 2px 8px 16px; }
 .sub-list { display: flex; flex-direction: column; gap: 2px; }

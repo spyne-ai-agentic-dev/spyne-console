@@ -2,13 +2,21 @@
 
 import { useState } from "react"
 import { TABS, railHTML, submenuHTML, contentHTML, crumbsHTML } from "./console-data"
+import { ActionItemsConsole } from "@/components/max-2/sales/console-v2/action-items"
 
 export default function Console() {
   const [tab, setTab] = useState<string>("home")
   const [sub, setSub] = useState<Record<string, number>>({})
+  const [navCollapsed, setNavCollapsed] = useState(false)
 
   const current = TABS.find((t: any) => t.id === tab) ?? TABS[0]
   const curSub = sub[tab] ?? 0
+
+  // Action Items tab (ported from intelligent-console-v2 sales) — shown for both
+  // Sales → Action Items and Service → Action Items.
+  const activeSubLabel = current.secondary?.[curSub]?.label
+  const showActionItems =
+    (current.id === "sales" || current.id === "service") && activeSubLabel === "Action Items"
 
   return (
     <div className="app">
@@ -41,23 +49,48 @@ export default function Console() {
         </div>
       </aside>
 
-      {/* Secondary contextual menu */}
-      <aside
-        className="submenu"
-        onClick={(e) => {
-          const b = (e.target as HTMLElement).closest(".sub-item") as HTMLElement | null
-          if (b?.dataset.sub != null) {
-            const idx = Number(b.dataset.sub)
-            setSub((s) => ({ ...s, [tab]: idx }))
-          }
-        }}
-        dangerouslySetInnerHTML={{ __html: submenuHTML(current, curSub) }}
-      />
+      {/* Secondary contextual menu (collapsible) */}
+      {!navCollapsed && (
+        <aside className="submenu">
+          <button
+            className="nav-collapse-btn"
+            title="Collapse menu"
+            aria-label="Collapse menu"
+            onClick={() => setNavCollapsed(true)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 6l-6 6 6 6M19 6l-6 6 6 6" />
+            </svg>
+          </button>
+          <div
+            className="submenu-scroll"
+            onClick={(e) => {
+              const b = (e.target as HTMLElement).closest(".sub-item") as HTMLElement | null
+              if (b?.dataset.sub != null) setSub((s) => ({ ...s, [tab]: Number(b.dataset.sub) }))
+            }}
+            dangerouslySetInnerHTML={{ __html: submenuHTML(current, curSub) }}
+          />
+        </aside>
+      )}
 
       {/* Main */}
       <div className="main">
         <header className="topbar">
-          <div className="crumbs" dangerouslySetInnerHTML={{ __html: crumbsHTML(current, curSub) }} />
+          <div className="topbar-left">
+            {navCollapsed && (
+              <button
+                className="nav-expand-btn"
+                title="Expand menu"
+                aria-label="Expand menu"
+                onClick={() => setNavCollapsed(false)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 6l6 6-6 6M5 6l6 6-6 6" />
+                </svg>
+              </button>
+            )}
+            <div className="crumbs" dangerouslySetInnerHTML={{ __html: crumbsHTML(current, curSub) }} />
+          </div>
           <div className="topbar-right">
             <div className="search">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -72,7 +105,17 @@ export default function Console() {
             </button>
           </div>
         </header>
-        <main className="content" key={tab} dangerouslySetInnerHTML={{ __html: contentHTML(current) }} />
+        {showActionItems ? (
+          <main className="content" key={`${tab}-action-items`} style={{ padding: 0 }}>
+            {/* .console-v2-sales-root scopes the Sales Console V2 design system (matches
+                intelligent-console-v2's sales experience wrapper) */}
+            <div className="console-v2-sales-root w-full min-w-0 bg-spyne-page" style={{ minHeight: "100%" }}>
+              <ActionItemsConsole />
+            </div>
+          </main>
+        ) : (
+          <main className="content" key={tab} dangerouslySetInnerHTML={{ __html: contentHTML(current) }} />
+        )}
       </div>
     </div>
   )
