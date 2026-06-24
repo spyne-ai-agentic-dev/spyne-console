@@ -66,8 +66,9 @@ function customerName(customerId, item) {
   return item?.customer_name ?? CUSTOMERS[customerId]?.name ?? humanize(customerId)
 }
 
-export function ActionItemsConsole({ readOnly = false }) {
-  const [items, setItems] = useState(ACTION_ITEMS)
+export function ActionItemsConsole({ readOnly = false, initialItems }) {
+  // initialItems (from the GET-only embed) overrides the bundled mock data when provided.
+  const [items, setItems] = useState(initialItems ?? ACTION_ITEMS)
   const [scope, setScope] = useState('manager') // 'manager' | 'mine'
   const [tab, setTab] = useState('unresolved')
   const [filters, setFilters] = useState({ search: '', assignment: 'all', channel: 'all', dept: 'all', intent: 'all' })
