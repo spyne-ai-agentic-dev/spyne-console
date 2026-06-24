@@ -1,7 +1,8 @@
 import type React from "react"
 import type { Metadata } from "next"
-// Tailwind v4 + design tokens (powers the ported Action Items console). Loaded into
-// Tailwind's @layer base, so the unlayered console.css below still governs the legacy
+// Tailwind v4 + design tokens (powers the ported Action Items console AND the
+// Settings screens). Dealer-onboarding tokens live in the @theme block at the
+// end of this file. Loaded first so console.css below still governs the legacy
 // shell (rail / submenu / panels) without being reset by Tailwind preflight.
 import "./globals.css"
 // Sales Console V2 component styles (scoped under `.console-v2-sales-root`) — powers the
