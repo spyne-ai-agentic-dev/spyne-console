@@ -50,12 +50,7 @@ export default function Console() {
       {/* Primary icon rail */}
       <aside className="rail">
         <div className="rail-logo">
-          <svg viewBox="0 0 24 24" fill="none">
-            <circle cx="7" cy="8" r="2.4" fill="#522EBF" />
-            <circle cx="14" cy="6" r="2.4" fill="#6843CC" />
-            <circle cx="17.5" cy="13" r="2.4" fill="#8460D9" />
-            <circle cx="10" cy="15" r="2.4" fill="#AB92E8" />
-          </svg>
+          <img src="/spyne-logo.png" alt="Spyne" style={{ width: 34, height: 34, objectFit: "contain" }} />
         </div>
         <nav
           className="rail-nav"
