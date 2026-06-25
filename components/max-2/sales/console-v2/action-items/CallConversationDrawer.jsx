@@ -27,6 +27,33 @@ function fmtClock(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Absolute timestamp for SMS turns (no call-relative seconds): "Jun 6, 2:02 PM".
+function fmtStamp(ms) {
+  if (!ms) return ''
+  const d = new Date(ms)
+  if (isNaN(d.getTime())) return ''
+  let h = d.getHours()
+  const ap = h >= 12 ? 'PM' : 'AM'
+  h = h % 12 || 12
+  return `${MON[d.getMonth()]} ${d.getDate()}, ${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`
+}
+
+// SMS conversations carry their thread inline in `smsMessages` (direction out=agent / in=customer,
+// body=text, createdAt=timestamp). Map to the shared turn shape, oldest-first.
+function smsTurns(conv) {
+  const arr = Array.isArray(conv?.smsMessages) ? [...conv.smsMessages] : []
+  arr.sort((a, b) => (Date.parse(a.createdAt || 0) || 0) - (Date.parse(b.createdAt || 0) || 0))
+  return arr
+    .map((m) => ({
+      role: m.direction === 'out' ? 'agent' : 'customer',
+      text: m.body || m.message || m.text || '',
+      atSec: null,
+      atMs: m.createdAt ? Date.parse(m.createdAt) : null,
+    }))
+    .filter((m) => m.text)
+}
+
 function CopyIcon({ value, title = 'Copy' }) {
   const [done, setDone] = useState(false)
   if (!value) return null
@@ -265,7 +292,9 @@ function MessageTurns({ messages, transcript, isMessaging, scrollToMs }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10.5px] font-bold" style={{ color: agent ? 'var(--spyne-primary)' : 'var(--spyne-text-secondary)' }}>{agent ? 'Agent' : 'Customer'}</span>
-                    {m.atSec != null && <span className="text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{fmtClock(m.atSec)}</span>}
+                    {m.atSec != null
+                      ? <span className="text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{fmtClock(m.atSec)}</span>
+                      : m.atMs ? <span className="text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{fmtStamp(m.atMs)}</span> : null}
                   </div>
                   <p className="mt-0.5 text-[12.5px] leading-snug" style={{ color: 'var(--spyne-text-secondary)' }}>{m.text}</p>
                 </div>
@@ -289,6 +318,7 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
 
   const [tab, setTab] = useState('Highlights')
   const [viewCallId, setViewCallId] = useState(mode === 'call' ? (item?.source_call_id || null) : null)
+  const [smsView, setSmsView] = useState(null) // an SMS conversation object (rendered from inline smsMessages)
   const [report, setReport] = useState(null)
   const [convs, setConvs] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -306,7 +336,16 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
     let cancelled = false
     setLoading(true); setError(null)
     fetchConversations(item.customer_id)
-      .then((r) => { if (!cancelled) setConvs(r.conversations) })
+      .then((r) => {
+        if (cancelled) return
+        setConvs(r.conversations)
+        // Land directly on the conversation this action item was created from.
+        const src = (r.conversations || []).find((c) => (c.conversationId || c._id) === item.source_conversation_id)
+        if (src) {
+          if (src.callId) setViewCallId(src.callId)
+          else if (Array.isArray(src.smsMessages) && src.smsMessages.length) setSmsView(src)
+        }
+      })
       .catch((e) => { if (!cancelled) setError(String(e?.message || e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -331,7 +370,7 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
   const phone = report?.customerMobile ?? cust?.phone ?? ''
   const channel = CHANNEL_META[item.source_channel]
   const showCallDetail = !!viewCallId
-  const inConvList = mode === 'conversation' && !viewCallId
+  const inConvList = mode === 'conversation' && !viewCallId && !smsView
   const scrollToMs = item.created_at ? Date.parse(item.created_at) : null
 
   const ageMin = report?.createdAt ? Math.floor((Date.now() - Date.parse(report.createdAt)) / 60000) : ageMinutes(item)
@@ -343,8 +382,8 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
       <div className="spyne-float spyne-animate-slide-up fixed right-0 top-0 z-[200] flex h-full w-[480px] max-w-[94vw] flex-col" style={{ background: 'var(--spyne-surface)' }} role="dialog" aria-modal="true" aria-label={isMessaging ? 'Conversation detail' : 'Call detail'}>
         {/* Header */}
         <div className="flex flex-shrink-0 items-start gap-2.5 border-b border-spyne-border px-4 py-3.5">
-          {mode === 'conversation' && viewCallId ? (
-            <button onClick={() => { setViewCallId(null); setReport(null); setTab('Highlights') }} aria-label="Back" className="spyne-focus-ring mt-0.5 inline-flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="arrow_back" size={18} /></button>
+          {mode === 'conversation' && (viewCallId || smsView) ? (
+            <button onClick={() => { setViewCallId(null); setSmsView(null); setReport(null); setTab('Highlights') }} aria-label="Back to conversations" className="spyne-focus-ring mt-0.5 inline-flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="arrow_back" size={18} /></button>
           ) : (
             <span className="mt-0.5 inline-flex size-8 items-center justify-center rounded-lg" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}><MaterialSymbol name={isMessaging ? (channel?.symbol || 'forum') : 'call'} size={16} /></span>
           )}
@@ -370,19 +409,26 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
               <p className="text-[12px]" style={{ color: 'var(--spyne-text-muted)' }}>No conversations found.</p>
             ) : (
               (convs || []).map((c) => {
-                const isThis = c.conversationId === item.source_conversation_id
+                const isThis = (c.conversationId || c._id) === item.source_conversation_id
+                const smsCount = Array.isArray(c.smsMessages) ? c.smsMessages.length : 0
+                const isSms = (c.type === 'sms' || c.type === 'chat') || (!c.callId && smsCount > 0)
+                const openable = !!c.callId || smsCount > 0
+                const lastSms = smsCount > 0 ? (c.smsMessages.find((m) => (m.body || m.message))?.body || '') : ''
+                const open = () => { if (c.callId) setViewCallId(c.callId); else if (smsCount > 0) setSmsView(c) }
                 return (
-                  <button key={c.conversationId || c._id} onClick={() => c.callId && setViewCallId(c.callId)} disabled={!c.callId}
+                  <button key={c.conversationId || c._id} onClick={open} disabled={!openable}
                     className="spyne-card flex flex-col gap-1 p-3 text-left transition-colors hover:border-spyne-primary disabled:cursor-not-allowed disabled:opacity-50"
                     style={isThis ? { borderColor: 'var(--spyne-primary)' } : undefined}>
                     <div className="flex items-center gap-2">
-                      <span className="spyne-badge spyne-badge-neutral" style={{ fontSize: 10 }}>{c.type || 'call'}</span>
+                      <span className="spyne-badge spyne-badge-neutral inline-flex items-center gap-1" style={{ fontSize: 10 }}><MaterialSymbol name={isSms ? 'sms' : 'call'} size={12} /> {c.type || (isSms ? 'sms' : 'call')}</span>
                       {isThis ? <span className="spyne-badge" style={{ fontSize: 10, background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}>this item</span> : null}
                       <span className="ml-auto text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>{c.status}</span>
                     </div>
-                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--spyne-text-primary)' }}>{c.callTitle || 'Conversation'}</span>
-                    {c.summary ? <span className="line-clamp-2 text-[11.5px]" style={{ color: 'var(--spyne-text-muted)' }}>{c.summary}</span> : null}
-                    {c.callId ? <span className="mt-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold" style={{ color: 'var(--spyne-primary)' }}><MaterialSymbol name={isMessaging ? 'forum' : 'play_circle'} size={13} /> Open {isMessaging ? 'conversation' : 'call'}</span> : null}
+                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--spyne-text-primary)' }}>{c.callTitle || (isSms ? 'SMS conversation' : 'Conversation')}</span>
+                    {c.summary ? <span className="line-clamp-2 text-[11.5px]" style={{ color: 'var(--spyne-text-muted)' }}>{Array.isArray(c.summary) ? c.summary.join(' ') : c.summary}</span>
+                      : lastSms ? <span className="line-clamp-2 text-[11.5px]" style={{ color: 'var(--spyne-text-muted)' }}>{lastSms}</span> : null}
+                    {openable ? <span className="mt-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold" style={{ color: 'var(--spyne-primary)' }}><MaterialSymbol name={isSms ? 'forum' : 'play_circle'} size={13} /> Open {isSms ? `conversation${smsCount ? ` · ${smsCount} msgs` : ''}` : 'call'}</span>
+                      : <span className="mt-0.5 text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>No transcript available</span>}
                   </button>
                 )
               })
@@ -435,6 +481,19 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
               {tab === msgLabel && <MessageTurns messages={report?.messages} transcript={report?.transcript} isMessaging={isMessaging} scrollToMs={scrollToMs} />}
             </div>
           </>
+        )}
+
+        {/* SMS / chat conversation detail — rendered from inline smsMessages (no audio, no report tabs) */}
+        {!loading && !error && smsView && (
+          <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
+            {(smsView.summary) ? (
+              <div className="spyne-card flex flex-col gap-1.5 p-3.5">
+                <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Summary</p>
+                <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--spyne-text-secondary)' }}>{Array.isArray(smsView.summary) ? smsView.summary.join(' ') : smsView.summary}</p>
+              </div>
+            ) : null}
+            <MessageTurns messages={smsTurns(smsView)} isMessaging scrollToMs={scrollToMs} />
+          </div>
         )}
       </div>
     </div>
