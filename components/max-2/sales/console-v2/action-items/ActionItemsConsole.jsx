@@ -20,24 +20,13 @@ import { EmptyState, SectionLabel, SpyneSwitch } from '../shared'
 import CategorizedSearchBox from './CategorizedSearchBox'
 import CreateActionItemModal from './CreateActionItemModal'
 import CustomerSidebar from './CustomerSidebar'
+import CallConversationDrawer from './CallConversationDrawer'
 import {
   ACTION_ITEMS, INTENT_TAXONOMY, DEPT_BADGE, DEPT_LABEL, CHANNEL_META, CUSTOMERS, USERS,
   CURRENT_USER_ID, CLEARED_TODAY, RESOLVED_TOTAL,
   RESOLUTION_TYPES, RESOLUTION_TYPE_LABEL, RESOLUTION_TYPE_GLYPH,
   ageLabel, ageMinutes, isPastSla, slaBurnRatio, deptOf,
 } from './data'
-
-// Open the source call / conversation for an action item. In the iframe embed we can't
-// navigate the parent cross-origin, so we postMessage the host (converse-ai), which owns
-// navigation and can route to the call recording / conversation by id.
-function openCall(callId) {
-  if (!callId) return
-  try { window.parent?.postMessage({ type: 'spyne:open-call', callId }, '*') } catch {}
-}
-function openConversation(conversationId) {
-  if (!conversationId) return
-  try { window.parent?.postMessage({ type: 'spyne:open-conversation', conversationId }, '*') } catch {}
-}
 
 // Snapshot of the predefined per-intent SLA hours (captured before any in-session edit),
 // so the Rules panel can offer "Reset SLAs". Edits mutate INTENT_TAXONOMY in memory only
@@ -98,6 +87,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
   const [resolvingFor, setResolvingFor] = useState(null)   // action_item_id awaiting resolution type
   const [highlightId, setHighlightId] = useState(null)     // action_item_id pulsed after a search pick
   const [sidebarCustomer, setSidebarCustomer] = useState(null)
+  const [sourceView, setSourceView] = useState(null) // { item, mode: 'call'|'conversation' } | null
   const [createOpen, setCreateOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
   const [resolvedDetailId, setResolvedDetailId] = useState(null) // open resolved/incorrect item in detail
@@ -388,6 +378,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
                   onAskAssign={setAssigningFor}
                   onAssign={assign}
                   readOnly={readOnly}
+                  onOpenSource={(it, m) => setSourceView({ item: it, mode: m })}
                   onOpenSidebar={setSidebarCustomer}
                 />
               )}
@@ -407,6 +398,9 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
       {/* Floating layers */}
       {sidebarCustomer && (
         <CustomerSidebar customerId={sidebarCustomer} items={items} onClose={() => setSidebarCustomer(null)} />
+      )}
+      {sourceView && (
+        <CallConversationDrawer item={sourceView.item} mode={sourceView.mode} onClose={() => setSourceView(null)} />
       )}
       {createOpen && !readOnly && (
         <CreateActionItemModal onCreate={(item) => { setItems((p) => [item, ...p]); flash('Action item created'); }} onClose={() => setCreateOpen(false)} />
@@ -689,7 +683,7 @@ function FlatItemRow({ item, active, highlight, onSelect, onOpenSidebar }) {
 
 /* ── Right: detail pane ──────────────────────────────────────────── */
 
-function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, readOnly }) {
+function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, onOpenSource, readOnly }) {
   const multi = items.length > 1
   // The pane can be heterogeneous (Intent / Assignee group spans customers).
   const sameCustomer = items.every((i) => i.customer_id === customerId)
@@ -740,6 +734,7 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
             onCancelAssign={() => onAskAssign(null)}
             onAssign={(userId) => onAssign(it.action_item_id, userId)}
             readOnly={readOnly}
+            onOpenSource={onOpenSource}
           />
         ))}
       </div>
@@ -788,7 +783,7 @@ function ActivityTrail({ item }) {
 
 /* ── Right: item card ────────────────────────────────────────────── */
 
-function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly }) {
+function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly, onOpenSource }) {
   const intent = INTENT_TAXONOMY[item.intent_id]
   const past = isPastSla(item)
   return (
@@ -822,8 +817,8 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           <div className="flex items-center gap-2">
             <span className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Source</span>
             <div className="ml-auto flex items-center gap-1">
-              <button onClick={() => openCall(item.source_call_id)} disabled={!item.source_call_id} title={item.source_call_id ? `Listen to the call (${item.source_call_id})` : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
-              <button onClick={() => openConversation(item.source_conversation_id)} disabled={!item.source_conversation_id} title={item.source_conversation_id ? `Open the conversation (${item.source_conversation_id})` : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
+              <button onClick={() => onOpenSource?.(item, 'call')} disabled={!item.source_call_id} title={item.source_call_id ? 'Open the call' : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
+              <button onClick={() => onOpenSource?.(item, 'conversation')} disabled={!item.source_conversation_id} title={item.source_conversation_id ? 'Open the conversation' : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
             </div>
           </div>
           <p className="mt-0.5 text-[12px] italic leading-snug" style={{ color: 'var(--spyne-text-muted)' }}>“{item.source_message}”</p>
