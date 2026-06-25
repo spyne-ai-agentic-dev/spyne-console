@@ -269,7 +269,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
   const resetSelection = () => { setSelectedGroup(null); setSelectedItemId(null) }
 
   return (
-    <div className={spyneSalesLayout.pageStack}>
+    <div className={cn(spyneSalesLayout.pageStack, 'min-h-0 flex-1 [&>*+*]:!mt-3')}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -330,15 +330,15 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
           />
 
           {/* Master / detail */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(248px,300px)_1fr]">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
             {/* LEFT list */}
-            <div className="flex flex-col gap-2.5">
+            <div className="flex min-h-0 flex-col gap-2.5 lg:w-[290px] lg:shrink-0">
               <SectionLabel
                 glyph="reorder"
                 text="Queue"
                 hint={`${isFlat ? flatSorted.length : groups.length} ${isFlat ? (flatSorted.length === 1 ? 'item' : 'items') : (groups.length === 1 ? 'group' : 'groups')} · worst SLA first`}
               />
-              <div className="flex max-h-[calc(100vh-380px)] flex-col gap-2 overflow-y-auto pr-1">
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {(isFlat ? flatSorted.length === 0 : groups.length === 0) ? (
                 <div className="spyne-card">
                   <EmptyState glyph="filter_alt_off" title="No items match these filters" helper="Try clearing a filter or widening your search." />
@@ -374,9 +374,9 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
             </div>
 
             {/* RIGHT detail */}
-            <div className="flex flex-col gap-2.5">
+            <div className="flex min-h-0 flex-1 flex-col gap-2.5">
               <SectionLabel glyph="task_alt" text="Open items" hint="resolve · assign · flag" />
-              <div className="spyne-card flex max-h-[calc(100vh-380px)] min-h-[420px] flex-col p-0">
+              <div className="spyne-card flex min-h-0 flex-1 flex-col p-0">
               {activeItems.length === 0 ? (
                 <EmptyState
                   glyph="task_alt"
@@ -447,7 +447,7 @@ function SlaHero({ metrics, filters, onApply, onClearedToday }) {
   const heroTone = breaching ? 'var(--spyne-danger-text)' : 'var(--spyne-success-text)'
   return (
     <div
-      className="spyne-animate-fade-in flex flex-wrap items-center gap-x-6 gap-y-4 rounded-2xl px-5 py-4"
+      className="spyne-animate-fade-in flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl px-5 py-2.5"
       style={{
         background: breaching ? 'var(--spyne-danger-subtle)' : 'var(--spyne-success-subtle)',
         border: `1px solid ${breaching ? 'var(--spyne-danger-muted)' : 'var(--spyne-success-muted)'}`,
@@ -477,7 +477,7 @@ function SlaHero({ metrics, filters, onApply, onClearedToday }) {
             Past SLA now {pastActive && <span style={{ color: heroTone }}>· filtering</span>}
           </p>
           <div className="flex items-baseline gap-2">
-            <span className="text-[44px] font-bold leading-none tabular-nums" style={{ color: heroTone }}>{metrics.breaching}</span>
+            <span className="text-[32px] font-bold leading-none tabular-nums" style={{ color: heroTone }}>{metrics.breaching}</span>
             <span className="text-[13px] font-semibold" style={{ color: 'var(--spyne-text-secondary)' }}>{breaching ? (metrics.breaching === 1 ? 'item breaching' : 'items breaching') : 'all clear'}</span>
           </div>
         </div>

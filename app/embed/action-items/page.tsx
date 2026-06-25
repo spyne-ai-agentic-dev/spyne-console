@@ -54,7 +54,7 @@ function ActionItemsEmbed() {
   }, [])
 
   return (
-    <div className="console-v2-sales-root w-full min-w-0 bg-spyne-page" style={{ minHeight: "100vh" }}>
+    <div className="console-v2-sales-root flex h-screen w-full min-w-0 flex-col overflow-hidden bg-spyne-page">
       {/* Dev rooftop switcher — localhost only (hidden when a prod token is present). */}
       {!token && (
         <form
@@ -106,7 +106,7 @@ function ActionItemsEmbed() {
       {/* Real data only: `items` is the fetched array ([] = empty state), never mock.
           key remounts the console when the scope (rooftop/department) changes.
           Side + bottom padding gives the full UI (and the inbox grid) breathing room. */}
-      <div className="px-max2-page pb-max2-page pt-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-max2-page pb-3 pt-3">
         {items === undefined ? (
           <div className="flex items-center justify-center py-24 text-[13px] text-spyne-text-muted">Loading action items…</div>
         ) : (
