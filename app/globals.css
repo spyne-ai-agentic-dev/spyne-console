@@ -2447,3 +2447,20 @@
   --color-red-lightest: #fef3f2;
   --color-yellow-soft: rgba(255, 250, 235, 0.8);
 }
+
+/* ── Appointments view animations ── */
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-drawer-in  { animation: drawer-in  200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-overlay-in { animation: overlay-in 160ms ease both; }
+.animate-pop-in     { animation: pop-in     140ms cubic-bezier(0.16, 1, 0.3, 1) both; }

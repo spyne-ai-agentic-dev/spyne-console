@@ -447,7 +447,7 @@ export function contentHTML(tab) {
       <div class="head-actions">${h.actions.map((a) => `<a class="btn ${a.k}" href="#">${a.t}</a>`).join('')}</div>
     </div>`;
   if (tab.kpis) html += kpis(tab.kpis);
-  html += `<div class="grid">${tab.panels.map(renderPanel).join('')}</div></div>`;
+  html += `<div class="panels-grid">${tab.panels.map(renderPanel).join('')}</div></div>`;
   return html;
 }
 

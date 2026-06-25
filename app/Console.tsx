@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { TABS, railHTML, submenuHTML, contentHTML, crumbsHTML } from "./console-data"
 import { ActionItemsConsole } from "@/components/max-2/sales/console-v2/action-items"
+import AppointmentsView from "@/components/appointments/AppointmentsView"
 import Reports from "./reports/Reports"
 import { SettingsSidebar } from "@/components/shell/settings-sidebar"
 import { SettingsScreenContent } from "@/components/settings"
@@ -35,10 +36,14 @@ export default function Console() {
   const showActionItems =
     (current.id === "sales" || current.id === "service") && activeSubLabel === "Action Items"
 
+  // Appointments view (Sales and Service)
+  const showAppointments =
+    (current.id === "sales" || current.id === "service") && activeSubLabel === "Appointments"
+
   // Sales / Service · Overview & Reports sub-tabs powered by the React reporting module
   const isReportTab = current.id === "sales" || current.id === "service"
   const reportView = activeSubLabel === "Reports" ? "reports" : activeSubLabel === "Overview" ? "overview" : null
-  const showReports = isReportTab && reportView !== null && !showActionItems
+  const showReports = isReportTab && reportView !== null && !showActionItems && !showAppointments
 
   return (
     <div className="app">
@@ -154,6 +159,10 @@ export default function Console() {
             <div className="console-v2-sales-root w-full min-w-0 bg-spyne-page" style={{ minHeight: "100%" }}>
               <ActionItemsConsole />
             </div>
+          </main>
+        ) : showAppointments ? (
+          <main className="content" key={`${tab}-appointments`} style={{ padding: 0 }}>
+            <AppointmentsView dept={current.id === "service" ? "service" : "sales"} />
           </main>
         ) : showReports ? (
           <main className="content" key={`${tab}-${activeSubLabel}`} style={{ padding: 0 }}>
