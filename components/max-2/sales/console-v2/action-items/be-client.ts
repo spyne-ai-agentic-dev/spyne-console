@@ -69,6 +69,37 @@ export async function fetchActionItemsViaProxy(enterpriseId?: string, teamId?: s
   return raw.map(mapBeItem)
 }
 
+/** LOCAL/DEV: assignable users for the embed's scope (active users only). */
+export async function fetchUsers(): Promise<{ id: string; name: string; initials: string; email?: string }[]> {
+  const scope = (window as unknown as { __AI_SCOPE__?: { enterpriseId?: string; teamId?: string } }).__AI_SCOPE__
+  const url = new URL("/api/users", window.location.origin)
+  if (scope?.enterpriseId) url.searchParams.set("enterpriseId", scope.enterpriseId)
+  if (scope?.teamId) url.searchParams.set("teamId", scope.teamId)
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" }, cache: "no-store" })
+  if (!res.ok) return []
+  const body = await res.json()
+  const active = body?.data?.activeUsers ?? {}
+  return Object.values(active)
+    .map((u: any) => {
+      const name = u.user_name || u.label || u.email_id || u.user_id || ""
+      const parts = String(name).trim().split(/\s+/).filter(Boolean)
+      const initials = (parts.length ? parts[0][0] + (parts[1]?.[0] ?? "") : "–").toUpperCase()
+      return { id: String(u.user_id), name, initials, email: u.email_id }
+    })
+    .filter((u) => u.id)
+}
+
+/** Assign an action item's lead to a user (PATCH via same-origin proxy). The embed's one write. */
+export async function assignActionItem(leadId: string, userId: string): Promise<boolean> {
+  if (!leadId || !userId) return false
+  const res = await fetch("/api/assign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ leadId, userId, action: "assign" }),
+  })
+  return res.ok
+}
+
 /** LOCAL/DEV: call detail (recording, transcript, AI summary) via the same-origin proxy. */
 export async function fetchCallReport(callId: string): Promise<any | null> {
   if (!callId) return null

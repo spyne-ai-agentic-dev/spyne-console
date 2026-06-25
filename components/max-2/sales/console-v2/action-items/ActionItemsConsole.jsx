@@ -15,12 +15,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { MaterialSymbol } from '@/components/max-2/material-symbol'
 import { max2Classes, spyneSalesLayout } from '@/lib/design-system/max-2'
 import { cn } from '@/lib/utils'
-import { SpyneLineTab, SpyneLineTabStrip } from '@/components/max-2/spyne-line-tabs'
 import { EmptyState, SectionLabel, SpyneSwitch } from '../shared'
 import CategorizedSearchBox from './CategorizedSearchBox'
 import CreateActionItemModal from './CreateActionItemModal'
 import CustomerSidebar from './CustomerSidebar'
 import CallConversationDrawer from './CallConversationDrawer'
+import { fetchUsers, assignActionItem } from './be-client'
 import {
   ACTION_ITEMS, INTENT_TAXONOMY, DEPT_BADGE, DEPT_LABEL, CHANNEL_META, CUSTOMERS, USERS,
   CURRENT_USER_ID,
@@ -84,6 +84,7 @@ function customerName(customerId, item) {
   return item?.customer_name ?? CUSTOMERS[customerId]?.name ?? humanize(customerId)
 }
 
+/** @param {{ readOnly?: boolean, initialItems?: any[], initialDept?: string }} props */
 export function ActionItemsConsole({ readOnly = false, initialItems, initialDept = 'all' }) {
   // initialItems (from the GET-only embed) overrides the bundled mock data when provided.
   const [items, setItems] = useState(initialItems ?? ACTION_ITEMS)
@@ -110,7 +111,19 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
   // Bumped when a per-intent SLA is edited in the Rules panel → recompute burn/sort/past-SLA.
   const [slaVersion, setSlaVersion] = useState(0)
 
+  const [users, setUsers] = useState([]) // live assignable users (embed scope)
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600) }
+
+  // Live mode: load assignable users for the scope; merge into USERS for name/initials display.
+  useEffect(() => {
+    if (!initialItems) return
+    let cancelled = false
+    fetchUsers()
+      .then((us) => { if (cancelled || !us.length) return; setUsers(us); us.forEach((u) => { USERS[u.id] = { name: u.name, initials: u.initials } }) })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const pending = useMemo(() => items.filter((i) => i.status === 'pending'), [items])
   // Resolved + Incorrect honour the Manager/Mine scope just like Unresolved:
@@ -219,7 +232,18 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
   }
   const markIncorrect = (id, reason) => { setItems((p) => p.map((i) => (i.action_item_id === id ? { ...i, status: 'incorrect', incorrect_reason: reason } : i))); setIncorrectFor(null); flash('Marked incorrect — excluded from closure rate') }
   const undoIncorrect = (id) => { setItems((p) => p.map((i) => (i.action_item_id === id ? { ...i, status: 'pending', incorrect_reason: undefined } : i))); flash('Restored to Unresolved') }
-  const assign = (id, userId) => { setItems((p) => p.map((i) => (i.action_item_id === id ? { ...i, assignee_user_id: userId } : i))); setAssigningFor(null); flash(`Assigned to ${USERS[userId]?.name ?? 'rep'}`) }
+  const assign = async (id, userId) => {
+    const it = items.find((i) => i.action_item_id === id)
+    const leadId = it?.lead_id || it?.customer_id
+    const uname = users.find((u) => u.id === userId)?.name ?? USERS[userId]?.name ?? 'rep'
+    setAssigningFor(null)
+    if (leadId) {
+      const ok = await assignActionItem(leadId, userId) // real PATCH via /api/assign
+      if (!ok) { flash('Could not assign — try again'); return }
+    }
+    setItems((p) => p.map((i) => (i.action_item_id === id ? { ...i, assignee_user_id: userId } : i)))
+    flash(`Assigned to ${uname}`)
+  }
 
   // ── Search-pick wiring ────────────────────────────────────────────
   // If a picked target would be hidden by an active intent/channel/dept/assignment
@@ -302,19 +326,30 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
         onClearedToday={() => { setTab('resolved'); setResolvedDetailId(null) }}
       />
 
-      {/* Tabs */}
-      <SpyneLineTabStrip>
-        {[['unresolved', 'Unresolved', filteredPending.length], ['resolved', 'Resolved', resolved.length], ['incorrect', 'Incorrect', incorrect.length]].map(([id, label, n]) => (
-          <SpyneLineTab key={id} active={tab === id} onClick={() => { setTab(id); setResolvedDetailId(null) }}>
-            {label} <span className="rounded-full px-1.5 py-0.5 text-[10.5px] font-bold tabular-nums" style={tab === id ? { background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' } : { background: 'var(--spyne-page-bg)', color: 'var(--spyne-text-muted)' }}>{n}</span>
-          </SpyneLineTab>
-        ))}
-      </SpyneLineTabStrip>
+      {/* Tabs — self-contained horizontal nav (underline + spacing) */}
+      <div role="tablist" className="flex items-center gap-1" style={{ borderBottom: '1px solid var(--spyne-border)' }}>
+        {[['unresolved', 'Unresolved', filteredPending.length], ['resolved', 'Resolved', resolved.length], ['incorrect', 'Incorrect', incorrect.length]].map(([id, label, n]) => {
+          const active = tab === id
+          return (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => { setTab(id); setResolvedDetailId(null) }}
+              className="spyne-focus-ring -mb-px inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-[13px] font-semibold transition-colors"
+              style={active ? { borderColor: 'var(--spyne-primary)', color: 'var(--spyne-primary)' } : { borderColor: 'transparent', color: 'var(--spyne-text-muted)' }}
+            >
+              {label}
+              <span className="rounded-full px-1.5 py-0.5 text-[10.5px] font-bold tabular-nums" style={active ? { background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' } : { background: 'var(--spyne-page-bg)', color: 'var(--spyne-text-muted)' }}>{n}</span>
+            </button>
+          )
+        })}
+      </div>
 
       {tab === 'resolved' ? (
-        <ResolvedList items={resolved} openId={resolvedDetailId} onOpen={setResolvedDetailId} onOpenSidebar={setSidebarCustomer} />
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1"><ResolvedList items={resolved} openId={resolvedDetailId} onOpen={setResolvedDetailId} onOpenSidebar={setSidebarCustomer} /></div>
       ) : tab === 'incorrect' ? (
-        <IncorrectList items={incorrect} onUndo={undoIncorrect} onOpenSidebar={setSidebarCustomer} />
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1"><IncorrectList items={incorrect} onUndo={undoIncorrect} onOpenSidebar={setSidebarCustomer} /></div>
       ) : (
         <>
           {/* Filters */}
@@ -332,7 +367,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
           {/* Master / detail */}
           <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
             {/* LEFT list */}
-            <div className="flex min-h-0 flex-col gap-2.5 lg:w-[290px] lg:shrink-0">
+            <div className="flex min-h-0 flex-col gap-2.5 lg:w-[380px] lg:shrink-0">
               <SectionLabel
                 glyph="reorder"
                 text="Queue"
@@ -403,6 +438,8 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
                   onMarkIncorrect={markIncorrect}
                   onAskAssign={setAssigningFor}
                   onAssign={assign}
+                  users={users}
+                  canAssign
                   readOnly={readOnly}
                   onOpenSource={(it, m) => setSourceView({ item: it, mode: m })}
                   onOpenSidebar={setSidebarCustomer}
@@ -769,7 +806,7 @@ function FlatItemRow({ item, active, highlight, onSelect, onOpenSidebar }) {
 
 /* ── Right: detail pane ──────────────────────────────────────────── */
 
-function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, onOpenSource, readOnly }) {
+function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, onOpenSource, readOnly, users, canAssign }) {
   const multi = items.length > 1
   // The pane can be heterogeneous (Intent / Assignee group spans customers).
   const sameCustomer = items.every((i) => i.customer_id === customerId)
@@ -819,6 +856,8 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
             onAskAssign={() => { onAskIncorrect(null); onCancelResolve(); onAskAssign(it.action_item_id) }}
             onCancelAssign={() => onAskAssign(null)}
             onAssign={(userId) => onAssign(it.action_item_id, userId)}
+            users={users}
+            canAssign={canAssign}
             readOnly={readOnly}
             onOpenSource={onOpenSource}
           />
@@ -869,7 +908,7 @@ function ActivityTrail({ item }) {
 
 /* ── Right: item card ────────────────────────────────────────────── */
 
-function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly, onOpenSource }) {
+function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly, onOpenSource, users, canAssign }) {
   const intent = INTENT_TAXONOMY[item.intent_id]
   const past = isPastSla(item)
   return (
@@ -927,15 +966,15 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
         </div>
       </div>
 
-      {/* Actions */}
-      {!readOnly && (askingResolve ? (
+      {/* Actions — Assign is enabled even in the read-only embed (the one allowed write) */}
+      {(!readOnly || canAssign) && (askingResolve && !readOnly ? (
         <ResolvePicker onResolve={onResolve} onCancel={onCancelResolve} />
-      ) : askingAssign ? (
+      ) : askingAssign && canAssign ? (
         <div className="border-t border-spyne-border px-4 py-3">
           <p className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Assign to</p>
           <div className="flex flex-wrap gap-1.5">
-            {Object.entries(USERS).filter(([id]) => id !== 'vini_agent').map(([id, u]) => (
-              <button key={id} onClick={() => onAssign(id)} className="spyne-focus-ring inline-flex items-center gap-1 rounded-lg border border-spyne-border px-2 py-1 text-[11px] font-medium transition-colors hover:border-spyne-primary" style={{ color: 'var(--spyne-text-secondary)' }}>
+            {((users && users.length) ? users : Object.entries(USERS).filter(([id]) => id !== 'vini_agent').map(([id, u]) => ({ id, name: u.name, initials: u.initials }))).map((u) => (
+              <button key={u.id} onClick={() => onAssign(u.id)} className="spyne-focus-ring inline-flex items-center gap-1 rounded-lg border border-spyne-border px-2 py-1 text-[11px] font-medium transition-colors hover:border-spyne-primary" style={{ color: 'var(--spyne-text-secondary)' }}>
                 <span className="flex size-4 items-center justify-center rounded-full text-[7.5px] font-bold" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}>{u.initials}</span>
                 {u.name}
               </button>
@@ -943,7 +982,7 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
             <button onClick={onCancelAssign} className="spyne-focus-ring ml-auto rounded text-[11px] font-semibold" style={{ color: 'var(--spyne-text-muted)' }}>Cancel</button>
           </div>
         </div>
-      ) : askingIncorrect ? (
+      ) : askingIncorrect && !readOnly ? (
         <div className="border-t border-spyne-border px-4 py-3">
           <p className="mb-1.5 text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Why is this incorrect?</p>
           <div className="flex flex-wrap gap-1.5">
@@ -955,9 +994,9 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
         </div>
       ) : (
         <div className="flex items-center gap-2 border-t border-spyne-border px-4 py-3">
-          <button onClick={onAskResolve} className="spyne-btn-primary !h-8 flex-1 justify-center !text-[12.5px]"><MaterialSymbol name="check_circle" size={16} /> Resolve</button>
-          <button onClick={onAskAssign} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="person_add" size={14} /> Assign</button>
-          <button onClick={onAskIncorrect} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="flag" size={14} /> Incorrect</button>
+          {!readOnly && <button onClick={onAskResolve} className="spyne-btn-primary !h-8 flex-1 justify-center !text-[12.5px]"><MaterialSymbol name="check_circle" size={16} /> Resolve</button>}
+          {canAssign && <button onClick={onAskAssign} className={cn('spyne-btn-secondary !h-8 !text-[12px]', readOnly && 'flex-1 justify-center')}><MaterialSymbol name="person_add" size={14} /> Assign</button>}
+          {!readOnly && <button onClick={onAskIncorrect} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="flag" size={14} /> Incorrect</button>}
         </div>
       ))}
     </div>
