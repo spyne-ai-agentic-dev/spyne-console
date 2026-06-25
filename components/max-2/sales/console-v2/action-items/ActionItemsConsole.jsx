@@ -929,40 +929,40 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
         </span>
       </div>
 
-      {/* Actual creation timestamp — the real date, alongside the relative age above */}
-      <div className="flex items-center gap-1 px-4 pt-1.5 text-[10.5px]" style={{ color: 'var(--spyne-text-muted)' }}>
-        <MaterialSymbol name="event" size={13} />
-        <span className="tabular-nums">Created {formatCreatedAt(item.created_at)}</span>
-      </div>
-
       <div className="px-4 py-3">
         {showCustomer && (
           <div className="mb-2"><CustomerNameButton customerId={item.customer_id} item={item} onOpen={onOpenSidebar} size={12} /></div>
         )}
-        {/* Headline — what needs doing (tier 1 / tier 3 eyebrow) */}
+        {/* Headline — what needs doing (full width, primary) */}
         <p className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>What needs doing</p>
         <p className="mt-1 text-[15px] font-semibold leading-snug" style={{ color: 'var(--spyne-text-primary)' }}>{item.intent_recap}</p>
 
-        {/* Source message — quiet quote (no boxed sub-card, just a left rule) */}
-        <div className="mt-3 border-l-2 pl-3" style={{ borderColor: 'var(--spyne-border)' }}>
-          <div className="flex items-center gap-2">
-            <span className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Source</span>
-            <div className="ml-auto flex items-center gap-1">
-              <button onClick={() => onOpenSource?.(item, 'call')} disabled={!item.source_call_id} title={item.source_call_id ? 'Open the call' : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
-              <button onClick={() => onOpenSource?.(item, 'conversation')} disabled={!item.source_conversation_id} title={item.source_conversation_id ? 'Open the conversation' : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
+        {/* Two-column body: source quote (primary, left) · details + activity rail (right) */}
+        <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:gap-6">
+          {/* Source — the substance, gets the width */}
+          <div className="min-w-0 flex-1 border-l-2 pl-3" style={{ borderColor: 'var(--spyne-border)' }}>
+            <div className="flex items-center gap-2">
+              <span className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Source</span>
+              <div className="ml-auto flex items-center gap-1">
+                <button onClick={() => onOpenSource?.(item, 'call')} disabled={!item.source_call_id} title={item.source_call_id ? 'Open the call' : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
+                <button onClick={() => onOpenSource?.(item, 'conversation')} disabled={!item.source_conversation_id} title={item.source_conversation_id ? 'Open the conversation' : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
+              </div>
             </div>
+            <p className="mt-1 text-[12.5px] italic leading-relaxed" style={{ color: 'var(--spyne-text-secondary)' }}>“{item.source_message}”</p>
           </div>
-          <p className="mt-0.5 text-[12px] italic leading-snug" style={{ color: 'var(--spyne-text-muted)' }}>“{item.source_message}”</p>
-        </div>
 
-        {/* Footer: assignee */}
-        <div className="mt-3 flex items-center gap-1.5">
-          <Assignee userId={item.assignee_user_id} />
-        </div>
-
-        {/* Activity trail */}
-        <div className="mt-3 border-t border-spyne-border pt-3">
-          <ActivityTrail item={item} />
+          {/* Right rail — details, assignee, activity (fills the width, de-clutters the left) */}
+          <div className="flex flex-col gap-3.5 border-t border-spyne-border pt-3 lg:w-[220px] lg:flex-shrink-0 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+            <div>
+              <p className="mb-1 text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Created</p>
+              <p className="text-[11px] tabular-nums" style={{ color: 'var(--spyne-text-secondary)' }}>{formatCreatedAt(item.created_at)}</p>
+            </div>
+            <div>
+              <p className="mb-1 text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Assignee</p>
+              <Assignee userId={item.assignee_user_id} />
+            </div>
+            <ActivityTrail item={item} />
+          </div>
         </div>
       </div>
 
