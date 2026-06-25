@@ -120,3 +120,40 @@ export function usersFromBe(docs: any[]): Record<string, { name: string; initial
   }
   return out
 }
+
+/**
+ * Normalize a conversational-ai-backend end-call report (GET /conversation/vapi/
+ * end-call-report-by-id) into the fields the Call/Conversation drawer renders.
+ * Defensive: tolerates missing nesting.
+ */
+export function normalizeCallReport(raw: any) {
+  const cd = raw?.callDetails ?? {}
+  const rep = raw?.report ?? {}
+  const ov = rep?.overview?.overall ?? {}
+  const start = cd.startedAt ? Date.parse(cd.startedAt) : NaN
+  const end = cd.endedAt ? Date.parse(cd.endedAt) : NaN
+  const durationSec =
+    Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round((end - start) / 1000)) : null
+  const summary = Array.isArray(rep.summary) ? rep.summary.join(" ") : rep.summary ?? ""
+  return {
+    callId: raw?.callId ?? cd.callId ?? "",
+    recordingUrl: cd.recordingUrl ?? null,
+    durationSec,
+    transcript: cd.transcript ?? "", // "AI: …\nCustomer: …"
+    messages: Array.isArray(cd.formattedMessages)
+      ? cd.formattedMessages.filter((m: any) => m?.role && m.role !== "system")
+      : [],
+    summary,
+    customerName: rep?.customerDetails?.name ?? cd.name ?? null,
+    customerMobile: rep?.customerDetails?.mobile ?? cd.mobile ?? null,
+    outcome: rep?.overview?.callOutcome ?? rep?.Outcome ?? rep?.outcome ?? null,
+    queryResolved: rep?.queryResolved ?? null,
+    customerIntent: ov.customerIntent ?? null,
+    sentiment: ov.sentiment ?? null,
+    sentimentScore: ov.sentimentScore ?? null,
+    aiResponseQuality: ov?.aiResponseQuality?.score ?? null,
+    aiScore: rep?.aiScore?.totalScore ?? null,
+    callScore: rep?.callScore ?? null,
+    endedReason: cd.endedReason ?? null,
+  }
+}

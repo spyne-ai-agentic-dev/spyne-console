@@ -66,3 +66,26 @@ export async function fetchActionItemsViaProxy(enterpriseId?: string, teamId?: s
   Object.assign(USERS, usersFromBe(raw))
   return raw.map(mapBeItem)
 }
+
+/** LOCAL/DEV: call detail (recording, transcript, AI summary) via the same-origin proxy. */
+export async function fetchCallReport(callId: string): Promise<any | null> {
+  if (!callId) return null
+  const res = await fetch(`/api/call-report?callId=${encodeURIComponent(callId)}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  })
+  if (!res.ok) throw new Error(`call-report ${res.status}`)
+  return res.json()
+}
+
+/** LOCAL/DEV: the customer's conversations via the same-origin proxy. Returns { conversations, summary }. */
+export async function fetchConversations(customerId: string): Promise<{ conversations: any[]; summary: any }> {
+  const res = await fetch(`/api/conversations?customerId=${encodeURIComponent(customerId)}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  })
+  if (!res.ok) throw new Error(`conversations ${res.status}`)
+  const body = await res.json()
+  const data = body?.data ?? {}
+  return { conversations: Array.isArray(data.conversations) ? data.conversations : [], summary: data.summary ?? null }
+}
