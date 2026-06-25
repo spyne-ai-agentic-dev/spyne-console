@@ -23,7 +23,7 @@ import CustomerSidebar from './CustomerSidebar'
 import CallConversationDrawer from './CallConversationDrawer'
 import {
   ACTION_ITEMS, INTENT_TAXONOMY, DEPT_BADGE, DEPT_LABEL, CHANNEL_META, CUSTOMERS, USERS,
-  CURRENT_USER_ID, CLEARED_TODAY, RESOLVED_TOTAL,
+  CURRENT_USER_ID,
   RESOLUTION_TYPES, RESOLUTION_TYPE_LABEL, RESOLUTION_TYPE_GLYPH,
   ageLabel, ageMinutes, isPastSla, slaBurnRatio, deptOf,
   formatCreatedAt, formatSla, createdDayKey,
@@ -170,8 +170,10 @@ export function ActionItemsConsole({ readOnly = false, initialItems, initialDept
     breaching: pending.filter(isPastSla).length,
     unassigned: pending.filter((i) => !i.assignee_user_id).length,
     repeatCallers: new Set(pending.filter((i) => i.repeat_caller_count >= 3).map((i) => i.customer_id)).size,
-    clearedToday: CLEARED_TODAY,
-  }), [pending, slaVersion])
+    // Real count: resolved items closed today (0 for live data, which only fetches pending) —
+    // not the bundled mock constant, which otherwise showed "11" on an empty live board.
+    clearedToday: resolved.filter((i) => i.closed_at && createdDayKey({ ...i, created_at: i.closed_at }) === 'today').length,
+  }), [pending, resolved, slaVersion])
 
   // ── Selection resolution ──────────────────────────────────────────
   // None view → a single item; grouped views → a group's worth of items.
@@ -1010,7 +1012,7 @@ function ResolvedList({ items, openId, onOpen, onOpenSidebar }) {
   const open = items.find((i) => i.action_item_id === openId)
   return (
     <div className="flex flex-col gap-3">
-      <SectionLabel glyph="check_circle" text="Resolved" hint={`${items.length} in view · ${RESOLVED_TOTAL} all-time`} />
+      <SectionLabel glyph="check_circle" text="Resolved" hint={`${items.length} in view`} />
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(320px,1fr)_minmax(320px,420px)]">
       <div className="flex flex-col gap-2">
         {items.map((it) => {
