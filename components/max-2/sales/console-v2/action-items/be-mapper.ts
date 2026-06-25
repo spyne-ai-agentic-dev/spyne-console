@@ -129,29 +129,77 @@ export function usersFromBe(docs: any[]): Record<string, { name: string; initial
 export function normalizeCallReport(raw: any) {
   const cd = raw?.callDetails ?? {}
   const rep = raw?.report ?? {}
-  const ov = rep?.overview?.overall ?? {}
+  const ovTop = rep?.overview ?? {} // appointmentScheduled / callbackScheduled / callOutcome / appointmentDetails
+  const ov = ovTop?.overall ?? {} // customerIntent / sentiment / aiResponseQuality
   const start = cd.startedAt ? Date.parse(cd.startedAt) : NaN
   const end = cd.endedAt ? Date.parse(cd.endedAt) : NaN
   const durationSec =
     Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round((end - start) / 1000)) : null
-  const summary = Array.isArray(rep.summary) ? rep.summary.join(" ") : rep.summary ?? ""
+
+  // Key Highlights / Call Summary — `report.summary` is the bullet array shown in the prod drawer.
+  const summaryPoints: string[] = Array.isArray(rep.summary)
+    ? rep.summary.map(asText).filter(Boolean)
+    : rep.summary
+      ? [asText(rep.summary)]
+      : Array.isArray(rep.SummarySMS)
+        ? rep.SummarySMS.map(asText).filter(Boolean)
+        : []
+  const actionItems: string[] = Array.isArray(rep.actionItems)
+    ? rep.actionItems.map(asText).filter(Boolean)
+    : rep.actionItems
+      ? [asText(rep.actionItems)]
+      : []
+
+  // AI Performance Analysis (report.overview.overall.aiResponseQuality).
+  const q = ov?.aiResponseQuality ?? {}
+  const aiQuality = {
+    score: q.score ?? null, // "8.5"
+    relevanceClarity: q?.metrics?.responseRelevanceAndClarity ?? null, // "9"
+    metrics: q?.metrics ?? null,
+    didWell: Array.isArray(q.whatAiDidBetter) ? q.whatAiDidBetter.filter(Boolean) : [],
+    improve: Array.isArray(q.whatAiCouldHaveDoneBetter) ? q.whatAiCouldHaveDoneBetter.filter(Boolean) : [],
+  }
+
+  // Appointment (report.overview.*).
+  const appointment = {
+    scheduled: !!ovTop.appointmentScheduled,
+    callbackScheduled: !!ovTop.callbackScheduled,
+    type: ovTop.appointmentType || null,
+    details: Array.isArray(ovTop.appointmentDetails) ? ovTop.appointmentDetails.map(asText).filter(Boolean) : [],
+  }
+
+  // Timestamped turns — raw `callDetails.messages` carry secondsFromStart + absolute `time`
+  // (formattedMessages drop the timing). `time` powers the SMS scroll-to-creation marker.
+  const messages = (Array.isArray(cd.messages) ? cd.messages : [])
+    .filter((m: any) => m?.role && m.role !== "system")
+    .map((m: any) => ({
+      role: m.role === "bot" || m.role === "assistant" ? "agent" : "customer",
+      text: asText(m.message ?? m.content),
+      atSec: typeof m.secondsFromStart === "number" ? m.secondsFromStart : null,
+      atMs: typeof m.time === "number" ? m.time : null,
+    }))
+    .filter((m: any) => m.text)
+
   return {
     callId: raw?.callId ?? cd.callId ?? "",
+    title: asText(rep.title) || null,
+    createdAt: raw?.createdAt ?? cd.startedAt ?? null,
     recordingUrl: cd.recordingUrl ?? null,
     durationSec,
-    transcript: cd.transcript ?? "", // "AI: …\nCustomer: …"
-    messages: Array.isArray(cd.formattedMessages)
-      ? cd.formattedMessages.filter((m: any) => m?.role && m.role !== "system")
-      : [],
-    summary,
+    transcript: cd.transcript ?? "", // "AI: …\nCustomer: …" fallback
+    messages,
+    summaryPoints,
+    summaryText: summaryPoints.join(" "),
+    actionItems,
     customerName: rep?.customerDetails?.name ?? cd.name ?? null,
     customerMobile: rep?.customerDetails?.mobile ?? cd.mobile ?? null,
-    outcome: rep?.overview?.callOutcome ?? rep?.Outcome ?? rep?.outcome ?? null,
+    outcome: ovTop.callOutcome ?? rep?.Outcome ?? rep?.outcome ?? null,
     queryResolved: rep?.queryResolved ?? null,
     customerIntent: ov.customerIntent ?? null,
     sentiment: ov.sentiment ?? null,
     sentimentScore: ov.sentimentScore ?? null,
-    aiResponseQuality: ov?.aiResponseQuality?.score ?? null,
+    aiQuality,
+    appointment,
     aiScore: rep?.aiScore?.totalScore ?? null,
     callScore: rep?.callScore ?? null,
     endedReason: cd.endedReason ?? null,

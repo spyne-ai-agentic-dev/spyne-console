@@ -9,6 +9,8 @@ export type EmbedScope = {
   enterpriseId: string
   teamId: string
   token: string
+  /** Department scope (sales|service); "all"/undefined = no department filter. */
+  department?: string
 }
 
 /** Returns the embed scope when fully present, else null (→ caller falls back to mock). */

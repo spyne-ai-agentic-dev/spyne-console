@@ -33,6 +33,9 @@ export async function GET(req: Request) {
   target.searchParams.set("isCompleted", q.get("isCompleted") || "false")
   target.searchParams.set("groupByCustomer", "false")
   target.searchParams.set("limit", q.get("limit") || "100")
+  // NOTE: action items carry no department field — passing `department` makes the BE filter to 0.
+  // Department scoping for action items is therefore applied CLIENT-SIDE (intent→dept). Only the
+  // conversations endpoint accepts a real `department` param.
 
   try {
     const res = await fetch(target.toString(), {

@@ -20,6 +20,7 @@ export async function fetchActionItems(): Promise<ActionItem[] | null> {
   url.searchParams.set("isCompleted", "false")
   url.searchParams.set("groupByCustomer", "false")
   url.searchParams.set("limit", "100")
+  // Department is applied client-side (action items have no department field) — not sent here.
 
   const res = await fetch(url.toString(), {
     method: "GET",
@@ -54,6 +55,7 @@ export async function fetchActionItemsViaProxy(enterpriseId?: string, teamId?: s
   const url = new URL("/api/action-items", window.location.origin)
   if (enterpriseId) url.searchParams.set("enterpriseId", enterpriseId)
   if (teamId) url.searchParams.set("teamId", teamId)
+  // Department NOT sent — action items have no department field server-side; filtered client-side.
   const res = await fetch(url.toString(), { headers: { Accept: "application/json" }, cache: "no-store" })
   if (!res.ok) throw new Error(`proxy /api/action-items → ${res.status}`)
   const body = await res.json()
@@ -78,9 +80,16 @@ export async function fetchCallReport(callId: string): Promise<any | null> {
   return res.json()
 }
 
-/** LOCAL/DEV: the customer's conversations via the same-origin proxy. Returns { conversations, summary }. */
+/** LOCAL/DEV: the customer's conversations via the same-origin proxy. Returns { conversations, summary }.
+ *  Scoped to the embed's selected department (window.__AI_SCOPE__.department) so leads/conversations
+ *  match the top-level department filter; falls back to the proxy default when unset. */
 export async function fetchConversations(customerId: string): Promise<{ conversations: any[]; summary: any }> {
-  const res = await fetch(`/api/conversations?customerId=${encodeURIComponent(customerId)}`, {
+  const scope = (window as unknown as { __AI_SCOPE__?: { department?: string } }).__AI_SCOPE__
+  const dept = scope?.department && scope.department !== "all" ? scope.department : undefined
+  const url = new URL("/api/conversations", window.location.origin)
+  url.searchParams.set("customerId", customerId)
+  if (dept) url.searchParams.set("department", dept)
+  const res = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
     cache: "no-store",
   })

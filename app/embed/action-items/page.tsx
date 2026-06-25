@@ -20,34 +20,36 @@ function ActionItemsEmbed() {
 
   const [ent, setEnt] = useState(params.get("enterpriseId") ?? "")
   const [team, setTeam] = useState(params.get("teamId") ?? "")
+  // Department scope (sales|service|all). Prod iframe passes ?department= / ?serviceType= / ?tab=.
+  const [dept, setDept] = useState(params.get("department") ?? params.get("serviceType") ?? params.get("tab") ?? "all")
   const [items, setItems] = useState<ActionItem[] | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [count, setCount] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  async function load(e: string, t: string) {
-    ;(window as unknown as { __AI_SCOPE__?: object }).__AI_SCOPE__ = { env, enterpriseId: e, teamId: t, token }
+  async function load(e: string, t: string, d: string) {
+    ;(window as unknown as { __AI_SCOPE__?: object }).__AI_SCOPE__ = { env, enterpriseId: e, teamId: t, token, department: d }
     setLoading(true)
+    setError(null)
     try {
       const live = token
         ? await fetchActionItems()
         : await fetchActionItemsViaProxy(e || undefined, t || undefined)
-      if (live && live.length) {
-        setItems(live)
-        setCount(live.length)
-      } else {
-        setItems(undefined)
-        setCount(0)
-      }
-    } catch {
-      setItems(undefined)
+      // Always reflect the REAL result for the requested scope — an empty array renders the
+      // console's empty state (never the bundled mock), so a 0-result or wrong scope is obvious.
+      setItems(Array.isArray(live) ? live : [])
+      setCount(Array.isArray(live) ? live.length : 0)
+    } catch (err) {
+      setItems([])
       setCount(null)
+      setError(String((err as Error)?.message || err))
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    void load(ent, team) // initial load
+    void load(ent, team, dept) // initial load
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -58,7 +60,7 @@ function ActionItemsEmbed() {
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
-            void load(ent, team)
+            void load(ent, team, dept)
           }}
           className="flex flex-wrap items-center gap-2 border-b border-spyne-border bg-spyne-surface px-4 py-2 text-[12px]"
         >
@@ -76,23 +78,41 @@ function ActionItemsEmbed() {
             placeholder="teamId"
             className="spyne-input !h-7 w-48"
           />
+          <span className="font-semibold text-spyne-text-secondary">Department</span>
+          <select
+            value={dept}
+            onChange={(e) => setDept(e.target.value)}
+            className="spyne-input spyne-focus-ring !h-7 cursor-pointer"
+            style={{ paddingRight: 22 }}
+          >
+            <option value="all">All</option>
+            <option value="sales">Sales</option>
+            <option value="service">Service</option>
+          </select>
           <button type="submit" className="spyne-btn-primary !h-7 !text-[12px]">
             {loading ? "Loading…" : "Load"}
           </button>
-          <span className="text-spyne-text-muted">
-            {loading
-              ? "fetching…"
-              : count === null
-                ? "(using .env.local defaults — or mock if unreachable)"
-                : count === 0
-                  ? "no live items — showing mock"
-                  : `live items: ${count}`}
-          </span>
+          {(() => {
+            const scopeLabel = `${ent || "default ent"} / ${team || "default team"}${dept !== "all" ? ` · ${dept}` : ""}`
+            if (loading) return <span className="text-spyne-text-muted">fetching {scopeLabel}…</span>
+            if (error) return <span style={{ color: "var(--spyne-danger-text)" }}>couldn’t load {scopeLabel}: {error}</span>
+            if (count === 0) return <span style={{ color: "var(--spyne-warning-text)" }}>no action items for {scopeLabel}</span>
+            if (count != null) return <span className="text-spyne-text-muted">{count} action items · {scopeLabel}</span>
+            return <span className="text-spyne-text-muted">{scopeLabel}</span>
+          })()}
         </form>
       )}
 
-      {/* key remounts the console when the dataset (or rooftop) changes */}
-      <ActionItemsConsole key={items ? `live-${ent}-${team}` : "mock"} readOnly initialItems={items} />
+      {/* Real data only: `items` is the fetched array ([] = empty state), never mock.
+          key remounts the console when the scope (rooftop/department) changes.
+          Side + bottom padding gives the full UI (and the inbox grid) breathing room. */}
+      <div className="px-max2-page pb-max2-page pt-4">
+        {items === undefined ? (
+          <div className="flex items-center justify-center py-24 text-[13px] text-spyne-text-muted">Loading action items…</div>
+        ) : (
+          <ActionItemsConsole key={`live-${ent}-${team}-${dept}`} readOnly initialItems={items} initialDept={dept} />
+        )}
+      </div>
     </div>
   )
 }
