@@ -39,6 +39,11 @@ function openConversation(conversationId) {
   try { window.parent?.postMessage({ type: 'spyne:open-conversation', conversationId }, '*') } catch {}
 }
 
+// Snapshot of the predefined per-intent SLA hours (captured before any in-session edit),
+// so the Rules panel can offer "Reset SLAs". Edits mutate INTENT_TAXONOMY in memory only
+// (session-local, not persisted — resets on reload).
+const SLA_DEFAULTS = Object.fromEntries(Object.values(INTENT_TAXONOMY).map((i) => [i.id, i.sla_hours]))
+
 const INCORRECT_REASONS = [
   { value: 'wrong_intent', label: 'Wrong intent' },
   { value: 'not_a_task', label: 'Not a task' },
@@ -97,6 +102,8 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
   const [rulesOpen, setRulesOpen] = useState(false)
   const [resolvedDetailId, setResolvedDetailId] = useState(null) // open resolved/incorrect item in detail
   const [toast, setToast] = useState(null)
+  // Bumped when a per-intent SLA is edited in the Rules panel → recompute burn/sort/past-SLA.
+  const [slaVersion, setSlaVersion] = useState(0)
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600) }
 
@@ -126,7 +133,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
   // Flat, SLA-burn-sorted list (used by the None view + as the source for groups).
   const flatSorted = useMemo(
     () => [...filteredPending].sort((a, b) => slaBurnRatio(b) - slaBurnRatio(a)),
-    [filteredPending]
+    [filteredPending, slaVersion]
   )
 
   // Group the filtered list by the active groupBy key, sorting groups by worst SLA burn.
@@ -148,14 +155,14 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
     const maxBurn = (its) => (its.length ? Math.max(...its.map(slaBurnRatio)) : -1)
     arr.sort((a, b) => maxBurn(b.items) - maxBurn(a.items))
     return arr
-  }, [filteredPending, groupBy])
+  }, [filteredPending, groupBy, slaVersion])
 
   const metrics = useMemo(() => ({
     breaching: pending.filter(isPastSla).length,
     unassigned: pending.filter((i) => !i.assignee_user_id).length,
     repeatCallers: new Set(pending.filter((i) => i.repeat_caller_count >= 3).map((i) => i.customer_id)).size,
     clearedToday: CLEARED_TODAY,
-  }), [pending])
+  }), [pending, slaVersion])
 
   // ── Selection resolution ──────────────────────────────────────────
   // None view → a single item; grouped views → a group's worth of items.
@@ -404,7 +411,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
       {createOpen && !readOnly && (
         <CreateActionItemModal onCreate={(item) => { setItems((p) => [item, ...p]); flash('Action item created'); }} onClose={() => setCreateOpen(false)} />
       )}
-      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} onEditSla={() => setSlaVersion((v) => v + 1)} />}
     </div>
   )
 }
@@ -1021,8 +1028,24 @@ function IncorrectList({ items, onUndo, onOpenSidebar }) {
 
 /* ── Rules / config drawer (read-only demo) ──────────────────────── */
 
-function RulesPanel({ onClose }) {
+function RulesPanel({ onClose, onEditSla }) {
   const [channelAuto, setChannelAuto] = useState(CHANNEL_AUTOCREATE_DEFAULTS)
+  // Editable per-intent SLA (session-only). Mutates INTENT_TAXONOMY in memory + bumps the
+  // parent's slaVersion so burn/sort/past-SLA recompute live; "Reset" restores SLA_DEFAULTS.
+  const [slaDraft, setSlaDraft] = useState(() =>
+    Object.fromEntries(Object.values(INTENT_TAXONOMY).map((i) => [i.id, i.sla_hours])),
+  )
+  const setSla = (id, hours) => {
+    const h = Math.max(1, Math.min(720, parseInt(String(hours || ''), 10) || 0))
+    setSlaDraft((p) => ({ ...p, [id]: h }))
+    INTENT_TAXONOMY[id].sla_hours = h
+    onEditSla?.()
+  }
+  const resetSla = () => {
+    Object.values(INTENT_TAXONOMY).forEach((i) => { INTENT_TAXONOMY[i.id].sla_hours = SLA_DEFAULTS[i.id] })
+    setSlaDraft({ ...SLA_DEFAULTS })
+    onEditSla?.()
+  }
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -1066,9 +1089,15 @@ function RulesPanel({ onClose }) {
             </div>
           </div>
 
-          {/* Department → intents routing */}
+          {/* Department → intents routing + editable per-intent SLA */}
           <div className="flex flex-col gap-2">
-            <SectionLabel glyph="account_tree" text="Department routing" />
+            <div className="flex items-center justify-between">
+              <SectionLabel glyph="account_tree" text="Intent routing & SLA" />
+              <button type="button" onClick={resetSla} className="spyne-btn-ghost !h-6 !text-[11px]">Reset SLAs</button>
+            </div>
+            <p className="text-[10.5px]" style={{ color: 'var(--spyne-text-muted)' }}>
+              Predefined intents (the tags). Per-intent SLA is editable here — session only, not saved.
+            </p>
             <div className="flex flex-col gap-2">
               {Object.entries(byDept).map(([dept, intents]) => (
                 <div key={dept} className="spyne-card p-3">
@@ -1080,7 +1109,19 @@ function RulesPanel({ onClose }) {
                     {intents.map((i) => (
                       <li key={i.id} className="flex items-center gap-2 rounded-md px-2 py-1.5" style={{ background: 'var(--spyne-page-bg)' }}>
                         <span className="flex-1 text-[12px]" style={{ color: 'var(--spyne-text-secondary)' }}>{i.display_name}</span>
-                        <span className="inline-flex items-center gap-1 text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="schedule" size={14} /> SLA {i.sla_hours}h</span>
+                        <label className="inline-flex items-center gap-1 text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }} title="Per-intent SLA (hours) — session only">
+                          <MaterialSymbol name="schedule" size={14} /> SLA
+                          <input
+                            type="number"
+                            min={1}
+                            max={720}
+                            value={slaDraft[i.id] ?? i.sla_hours}
+                            onChange={(e) => setSla(i.id, e.target.value)}
+                            className="spyne-input !h-6 w-12 px-1 text-right text-[11px]"
+                            aria-label={`SLA hours for ${i.display_name}`}
+                          />
+                          h
+                        </label>
                       </li>
                     ))}
                   </ul>
