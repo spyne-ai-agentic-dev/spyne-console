@@ -20,12 +20,30 @@ import { EmptyState, SectionLabel, SpyneSwitch } from '../shared'
 import CategorizedSearchBox from './CategorizedSearchBox'
 import CreateActionItemModal from './CreateActionItemModal'
 import CustomerSidebar from './CustomerSidebar'
+import CallConversationDrawer from './CallConversationDrawer'
 import {
   ACTION_ITEMS, INTENT_TAXONOMY, DEPT_BADGE, DEPT_LABEL, CHANNEL_META, CUSTOMERS, USERS,
   CURRENT_USER_ID, CLEARED_TODAY, RESOLVED_TOTAL,
   RESOLUTION_TYPES, RESOLUTION_TYPE_LABEL, RESOLUTION_TYPE_GLYPH,
   ageLabel, ageMinutes, isPastSla, slaBurnRatio, deptOf,
+  formatCreatedAt, formatSla, createdDayKey,
 } from './data'
+
+// Snapshot of the predefined per-intent SLA hours (captured before any in-session edit),
+// so the Rules panel can offer "Reset SLAs". Edits mutate INTENT_TAXONOMY in memory only
+// (session-local, not persisted — resets on reload).
+const SLA_DEFAULTS = Object.fromEntries(Object.values(INTENT_TAXONOMY).map((i) => [i.id, i.sla_hours]))
+
+// SLA editing in minutes / hours / days — the stored unit stays `sla_hours` (may be fractional).
+const SLA_UNIT_HOURS = { m: 1 / 60, h: 1, d: 24 }
+const SLA_UNITS = [['m', 'Min'], ['h', 'Hr'], ['d', 'Day']]
+const round2 = (n) => Math.round(n * 100) / 100
+// Express sla_hours as the most natural {value, unit} for editing (<1h → minutes, exact days → days).
+function splitSla(hours) {
+  if (hours < 1) return { value: Math.round(hours * 60), unit: 'm' }
+  if (hours >= 24 && hours % 24 === 0) return { value: hours / 24, unit: 'd' }
+  return { value: round2(hours), unit: 'h' }
+}
 
 const INCORRECT_REASONS = [
   { value: 'wrong_intent', label: 'Wrong intent' },
@@ -66,11 +84,15 @@ function customerName(customerId, item) {
   return item?.customer_name ?? CUSTOMERS[customerId]?.name ?? humanize(customerId)
 }
 
-export function ActionItemsConsole() {
-  const [items, setItems] = useState(ACTION_ITEMS)
+export function ActionItemsConsole({ readOnly = false, initialItems, initialDept = 'all' }) {
+  // initialItems (from the GET-only embed) overrides the bundled mock data when provided.
+  const [items, setItems] = useState(initialItems ?? ACTION_ITEMS)
   const [scope, setScope] = useState('manager') // 'manager' | 'mine'
   const [tab, setTab] = useState('unresolved')
-  const [filters, setFilters] = useState({ search: '', assignment: 'all', channel: 'all', dept: 'all', intent: 'all' })
+  const [filters, setFilters] = useState({ search: '', assignment: 'all', channel: 'all', dept: initialDept || 'all', intent: 'all', sla: 'all', repeat: false, created: 'all' })
+  // Apply a metric-tile / quick-chip filter and snap back to the Unresolved tab so the
+  // filtered queue is actually visible (metrics are global KPIs; the click filters the list).
+  const applyQuickFilter = (patch) => { setFilters((f) => ({ ...f, ...patch })); setTab('unresolved'); setResolvedDetailId(null) }
   const [groupBy, setGroupBy] = useState('customer')
   const [selectedGroup, setSelectedGroup] = useState(null)  // group key (customer/intent/assignee) the user picked
   const [selectedItemId, setSelectedItemId] = useState(null) // single action_item_id (None view + search highlight)
@@ -80,10 +102,13 @@ export function ActionItemsConsole() {
   const [resolvingFor, setResolvingFor] = useState(null)   // action_item_id awaiting resolution type
   const [highlightId, setHighlightId] = useState(null)     // action_item_id pulsed after a search pick
   const [sidebarCustomer, setSidebarCustomer] = useState(null)
+  const [sourceView, setSourceView] = useState(null) // { item, mode: 'call'|'conversation' } | null
   const [createOpen, setCreateOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
   const [resolvedDetailId, setResolvedDetailId] = useState(null) // open resolved/incorrect item in detail
   const [toast, setToast] = useState(null)
+  // Bumped when a per-intent SLA is edited in the Rules panel → recompute burn/sort/past-SLA.
+  const [slaVersion, setSlaVersion] = useState(0)
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600) }
 
@@ -102,18 +127,22 @@ export function ActionItemsConsole() {
     if (filters.channel !== 'all' && i.source_channel !== filters.channel) return false
     if (filters.dept !== 'all' && deptOf(i) !== filters.dept) return false
     if (filters.intent !== 'all' && i.intent_id !== filters.intent) return false
+    if (filters.sla === 'past' && !isPastSla(i)) return false
+    if (filters.sla === 'atrisk' && (isPastSla(i) || slaBurnRatio(i) < 0.75)) return false
+    if (filters.repeat && i.repeat_caller_count < 3) return false
+    if (filters.created !== 'all' && createdDayKey(i) !== filters.created) return false
     if (filters.search) {
       const q = filters.search.toLowerCase()
       const name = customerName(i.customer_id, i).toLowerCase()
       if (!i.intent_recap.toLowerCase().includes(q) && !name.includes(q) && !i.action_item_id.includes(q)) return false
     }
     return true
-  }), [pending, filters, scope])
+  }), [pending, filters, scope, slaVersion])
 
   // Flat, SLA-burn-sorted list (used by the None view + as the source for groups).
   const flatSorted = useMemo(
     () => [...filteredPending].sort((a, b) => slaBurnRatio(b) - slaBurnRatio(a)),
-    [filteredPending]
+    [filteredPending, slaVersion]
   )
 
   // Group the filtered list by the active groupBy key, sorting groups by worst SLA burn.
@@ -135,14 +164,14 @@ export function ActionItemsConsole() {
     const maxBurn = (its) => (its.length ? Math.max(...its.map(slaBurnRatio)) : -1)
     arr.sort((a, b) => maxBurn(b.items) - maxBurn(a.items))
     return arr
-  }, [filteredPending, groupBy])
+  }, [filteredPending, groupBy, slaVersion])
 
   const metrics = useMemo(() => ({
     breaching: pending.filter(isPastSla).length,
     unassigned: pending.filter((i) => !i.assignee_user_id).length,
     repeatCallers: new Set(pending.filter((i) => i.repeat_caller_count >= 3).map((i) => i.customer_id)).size,
     clearedToday: CLEARED_TODAY,
-  }), [pending])
+  }), [pending, slaVersion])
 
   // ── Selection resolution ──────────────────────────────────────────
   // None view → a single item; grouped views → a group's worth of items.
@@ -248,9 +277,11 @@ export function ActionItemsConsole() {
           <button onClick={() => setRulesOpen(true)} className="spyne-btn-ghost !h-9 !text-[12.5px]" title="Action-item rules & routing">
             <MaterialSymbol name="settings" size={16} /> Rules
           </button>
-          <button onClick={() => setCreateOpen(true)} className="spyne-btn-primary !h-9 !text-[12.5px]">
-            <MaterialSymbol name="add_task" size={16} /> Create action item
-          </button>
+          {!readOnly && (
+            <button onClick={() => setCreateOpen(true)} className="spyne-btn-primary !h-9 !text-[12.5px]">
+              <MaterialSymbol name="add_task" size={16} /> Create action item
+            </button>
+          )}
           <div className="inline-flex rounded-lg border border-spyne-border bg-spyne-surface p-0.5">
             {[['manager', 'Manager', 'groups'], ['mine', 'My queue', 'person']].map(([id, label, icon]) => (
               <button key={id} onClick={() => { setScope(id); resetSelection() }} className={cn('spyne-focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition-colors', scope === id ? 'bg-spyne-primary text-white' : 'text-spyne-text-secondary hover:text-spyne-text-primary')}>
@@ -261,8 +292,13 @@ export function ActionItemsConsole() {
         </div>
       </div>
 
-      {/* SLA banner — the hero answer: how many items are past SLA right now */}
-      <SlaHero metrics={metrics} />
+      {/* SLA banner — the hero answer + one-click metric filters */}
+      <SlaHero
+        metrics={metrics}
+        filters={filters}
+        onApply={applyQuickFilter}
+        onClearedToday={() => { setTab('resolved'); setResolvedDetailId(null) }}
+      />
 
       {/* Tabs */}
       <SpyneLineTabStrip>
@@ -292,7 +328,7 @@ export function ActionItemsConsole() {
           />
 
           {/* Master / detail */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(320px,400px)_1fr]">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(248px,300px)_1fr]">
             {/* LEFT list */}
             <div className="flex flex-col gap-2.5">
               <SectionLabel
@@ -327,6 +363,7 @@ export function ActionItemsConsole() {
                     onSelect={() => { setSelectedGroup(g.key); setSelectedItemId(null) }}
                     onToggle={() => setExpanded((m) => ({ ...m, [g.key]: !m[g.key] }))}
                     onResolveAll={() => resolveAll(g.items)}
+                    readOnly={readOnly}
                     onOpenSidebar={(cid) => setSidebarCustomer(cid)}
                   />
                 ))
@@ -337,7 +374,7 @@ export function ActionItemsConsole() {
             {/* RIGHT detail */}
             <div className="flex flex-col gap-2.5">
               <SectionLabel glyph="task_alt" text="Open items" hint="resolve · assign · flag" />
-              <div className="spyne-card flex min-h-[420px] flex-col p-0">
+              <div className="spyne-card flex max-h-[calc(100vh-380px)] min-h-[420px] flex-col p-0">
               {activeItems.length === 0 ? (
                 <EmptyState
                   glyph="task_alt"
@@ -364,6 +401,8 @@ export function ActionItemsConsole() {
                   onMarkIncorrect={markIncorrect}
                   onAskAssign={setAssigningFor}
                   onAssign={assign}
+                  readOnly={readOnly}
+                  onOpenSource={(it, m) => setSourceView({ item: it, mode: m })}
                   onOpenSidebar={setSidebarCustomer}
                 />
               )}
@@ -384,10 +423,13 @@ export function ActionItemsConsole() {
       {sidebarCustomer && (
         <CustomerSidebar customerId={sidebarCustomer} items={items} onClose={() => setSidebarCustomer(null)} />
       )}
-      {createOpen && (
+      {sourceView && (
+        <CallConversationDrawer item={sourceView.item} mode={sourceView.mode} onClose={() => setSourceView(null)} />
+      )}
+      {createOpen && !readOnly && (
         <CreateActionItemModal onCreate={(item) => { setItems((p) => [item, ...p]); flash('Action item created'); }} onClose={() => setCreateOpen(false)} />
       )}
-      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} onEditSla={() => setSlaVersion((v) => v + 1)} />}
     </div>
   )
 }
@@ -397,8 +439,10 @@ export function ActionItemsConsole() {
    Big tabular number anchors the left; secondary queue stats are demoted to a
    quiet, divider-separated rail on the right so the eye lands on the hero first. */
 
-function SlaHero({ metrics }) {
+function SlaHero({ metrics, filters, onApply, onClearedToday }) {
   const breaching = metrics.breaching > 0
+  const pastActive = filters?.sla === 'past'
+  const heroTone = breaching ? 'var(--spyne-danger-text)' : 'var(--spyne-success-text)'
   return (
     <div
       className="spyne-animate-fade-in flex flex-wrap items-center gap-x-6 gap-y-4 rounded-2xl px-5 py-4"
@@ -407,51 +451,84 @@ function SlaHero({ metrics }) {
         border: `1px solid ${breaching ? 'var(--spyne-danger-muted)' : 'var(--spyne-success-muted)'}`,
       }}
     >
-      {/* Hero number + answer (tier 1 + tier 3 eyebrow) */}
-      <div className="flex items-center gap-4">
+      {/* Hero number — click to filter the queue to past-SLA items (tier 1 + tier 3 eyebrow) */}
+      <button
+        type="button"
+        onClick={() => onApply?.({ sla: pastActive ? 'all' : 'past' })}
+        aria-pressed={pastActive}
+        title={pastActive ? 'Filtering to past-SLA items — click to clear' : 'Filter to past-SLA items'}
+        className="spyne-focus-ring -mx-2 -my-1 flex items-center gap-4 rounded-xl px-2 py-1 text-left transition-colors hover:bg-white/50"
+        style={pastActive ? { boxShadow: `inset 0 0 0 2px ${heroTone}`, background: 'rgba(255,255,255,0.55)' } : undefined}
+      >
         <span
           className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl"
           style={{
             background: breaching ? 'var(--spyne-danger-subtle)' : 'var(--spyne-success-subtle)',
-            color: breaching ? 'var(--spyne-danger-text)' : 'var(--spyne-success-text)',
+            color: heroTone,
             boxShadow: `inset 0 0 0 1px ${breaching ? 'var(--spyne-danger-muted)' : 'var(--spyne-success-muted)'}`,
           }}
         >
           <MaterialSymbol name={breaching ? 'warning' : 'task_alt'} size={24} />
         </span>
         <div className="min-w-0">
-          <p className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Past SLA now</p>
+          <p className="flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>
+            Past SLA now {pastActive && <span style={{ color: heroTone }}>· filtering</span>}
+          </p>
           <div className="flex items-baseline gap-2">
-            <span className="text-[44px] font-bold leading-none tabular-nums" style={{ color: breaching ? 'var(--spyne-danger-text)' : 'var(--spyne-success-text)' }}>{metrics.breaching}</span>
+            <span className="text-[44px] font-bold leading-none tabular-nums" style={{ color: heroTone }}>{metrics.breaching}</span>
             <span className="text-[13px] font-semibold" style={{ color: 'var(--spyne-text-secondary)' }}>{breaching ? (metrics.breaching === 1 ? 'item breaching' : 'items breaching') : 'all clear'}</span>
           </div>
         </div>
-      </div>
+      </button>
 
-      {/* Secondary queue stats — demoted, divider-separated rail */}
-      <div className="ml-auto flex items-stretch gap-5">
-        <HeroStat n={metrics.unassigned} label="Unassigned" tone="var(--spyne-warning-ink)" />
+      {/* Secondary queue stats — demoted, divider-separated rail; each is a one-click filter */}
+      <div className="ml-auto flex items-stretch gap-3">
+        <HeroStat n={metrics.unassigned} label="Unassigned" icon="person_off" tone="var(--spyne-warning-ink)" active={filters?.assignment === 'unassigned'} onClick={() => onApply?.({ assignment: filters?.assignment === 'unassigned' ? 'all' : 'unassigned' })} />
         <span className="w-px self-stretch" style={{ background: 'var(--spyne-border)' }} />
-        <HeroStat n={metrics.repeatCallers} label="Repeat callers" tone="var(--spyne-primary)" />
+        <HeroStat n={metrics.repeatCallers} label="Repeat callers" icon="autorenew" tone="var(--spyne-primary)" active={!!filters?.repeat} onClick={() => onApply?.({ repeat: !filters?.repeat })} />
         <span className="w-px self-stretch" style={{ background: 'var(--spyne-border)' }} />
-        <HeroStat n={metrics.clearedToday} label="Cleared today" tone="var(--spyne-success-text)" />
+        <HeroStat n={metrics.clearedToday} label="Cleared today" icon="task_alt" tone="var(--spyne-success-text)" onClick={onClearedToday} />
       </div>
     </div>
   )
 }
 
-function HeroStat({ n, label, tone }) {
+function HeroStat({ n, label, tone, icon, active, onClick }) {
   return (
-    <div className="flex flex-col justify-center">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active ?? undefined}
+      title={active ? `Filtering by ${label} — click to clear` : `Filter by ${label}`}
+      className="spyne-focus-ring flex flex-col justify-center rounded-lg px-2.5 py-1 transition-colors hover:bg-white/50"
+      style={active ? { boxShadow: `inset 0 0 0 2px ${tone}`, background: 'rgba(255,255,255,0.55)' } : undefined}
+    >
       <span className="text-[22px] font-bold leading-none tabular-nums" style={{ color: tone }}>{n}</span>
-      <span className="mt-1 text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>{label}</span>
-    </div>
+      <span className="mt-1 inline-flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>
+        <MaterialSymbol name={icon} size={12} /> {label}
+      </span>
+    </button>
   )
 }
 
 /* ── Filters ─────────────────────────────────────────────────────── */
 
 function FilterBar({ filters, onChange, items, groupBy, onGroupBy, onPickCustomer, onPickIntent, onPickItem }) {
+  const set = (patch) => onChange({ ...filters, ...patch })
+  // BDC triage chips — one-click filters for the queues reps live in.
+  const chips = [
+    { key: 'past', label: 'Past SLA', icon: 'warning', active: filters.sla === 'past', on: () => set({ sla: filters.sla === 'past' ? 'all' : 'past' }) },
+    { key: 'atrisk', label: 'At risk', icon: 'hourglass_bottom', active: filters.sla === 'atrisk', on: () => set({ sla: filters.sla === 'atrisk' ? 'all' : 'atrisk' }) },
+    { key: 'unassigned', label: 'Unassigned', icon: 'person_off', active: filters.assignment === 'unassigned', on: () => set({ assignment: filters.assignment === 'unassigned' ? 'all' : 'unassigned' }) },
+    { key: 'repeat', label: 'Repeat callers', icon: 'autorenew', active: !!filters.repeat, on: () => set({ repeat: !filters.repeat }) },
+    { key: 'today', label: 'Created today', icon: 'today', active: filters.created === 'today', on: () => set({ created: filters.created === 'today' ? 'all' : 'today' }) },
+    { key: 'yesterday', label: 'Created yesterday', icon: 'event', active: filters.created === 'yesterday', on: () => set({ created: filters.created === 'yesterday' ? 'all' : 'yesterday' }) },
+    { key: 'callbacks', label: 'Callbacks', icon: 'phone_callback', active: filters.intent === 'callback_request', on: () => set({ intent: filters.intent === 'callback_request' ? 'all' : 'callback_request' }) },
+  ]
+  // `dept` is a top-level scope (set in the embed header), not a quick filter — leave it out
+  // of the in-strip active/clear logic so clearing filters never desyncs from the top scope.
+  const anyActive = filters.search || filters.assignment !== 'all' || filters.channel !== 'all' || filters.intent !== 'all' || filters.sla !== 'all' || filters.repeat || filters.created !== 'all'
+  const clearAll = () => onChange({ ...filters, search: '', assignment: 'all', channel: 'all', intent: 'all', sla: 'all', repeat: false, created: 'all' })
   return (
     <div className="spyne-card flex flex-col gap-2.5 px-3 py-2.5">
       <div className="min-w-[220px]">
@@ -464,15 +541,40 @@ function FilterBar({ filters, onChange, items, groupBy, onGroupBy, onPickCustome
           onPickItem={onPickItem}
         />
       </div>
+      {/* BDC quick filters — one-click triage */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Quick</span>
+        {chips.map((c) => <FilterChip key={c.key} label={c.label} icon={c.icon} active={c.active} on={c.on} />)}
+        {anyActive && (
+          <button type="button" onClick={clearAll} className="spyne-focus-ring ml-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}>
+            <MaterialSymbol name="close" size={13} /> Clear
+          </button>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Select label="Group by" value={groupBy} onChange={onGroupBy} options={GROUP_BY.map(([v, l]) => [v, l])} />
         <span className="hidden h-5 w-px bg-spyne-border sm:inline-block" />
         <Select label="Intent" value={filters.intent} onChange={(v) => onChange({ ...filters, intent: v })} options={[['all', 'All'], ...Object.values(INTENT_TAXONOMY).map((i) => [i.id, i.display_name])]} />
         <Select label="Assignment" value={filters.assignment} onChange={(v) => onChange({ ...filters, assignment: v })} options={[['all', 'All'], ['assigned', 'Assigned'], ['unassigned', 'Unassigned']]} />
         <Select label="Channel" value={filters.channel} onChange={(v) => onChange({ ...filters, channel: v })} options={[['all', 'All'], ['call', 'Call'], ['sms', 'SMS'], ['chat', 'Chat'], ['email', 'Email']]} />
-        <Select label="Dept" value={filters.dept} onChange={(v) => onChange({ ...filters, dept: v })} options={[['all', 'All'], ['sales', 'Sales'], ['service', 'Service'], ['compliance', 'Compliance']]} />
       </div>
     </div>
+  )
+}
+
+function FilterChip({ label, icon, active, on }) {
+  return (
+    <button
+      type="button"
+      onClick={on}
+      aria-pressed={active}
+      className="spyne-focus-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold transition-colors"
+      style={active
+        ? { background: 'var(--spyne-primary-soft)', borderColor: 'var(--spyne-primary)', color: 'var(--spyne-primary)' }
+        : { background: 'var(--spyne-surface)', borderColor: 'var(--spyne-border)', color: 'var(--spyne-text-secondary)' }}
+    >
+      <MaterialSymbol name={icon} size={14} /> {label}
+    </button>
   )
 }
 
@@ -546,7 +648,7 @@ function CustomerNameButton({ customerId, item, onOpen, size = 13 }) {
 
 /* ── Left: grouped row (Customer / Intent / Assignee) ────────────── */
 
-function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onResolveAll, onOpenSidebar }) {
+function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onResolveAll, onOpenSidebar, readOnly }) {
   const its = group.items
   const multi = its.length > 1
   const worst = its[0]
@@ -622,7 +724,7 @@ function GroupRow({ groupBy, group, active, expanded, onSelect, onToggle, onReso
               </li>
             ))}
           </ul>
-          {sameCustomer && (
+          {!readOnly && sameCustomer && (
             <button onClick={(e) => { e.stopPropagation(); onResolveAll() }} className="spyne-focus-ring mt-2 inline-flex items-center gap-1 rounded text-[11.5px] font-semibold" style={{ color: 'var(--spyne-primary)' }}>
               <MaterialSymbol name="done_all" size={14} /> Resolve all {its.length}
             </button>
@@ -665,7 +767,7 @@ function FlatItemRow({ item, active, highlight, onSelect, onOpenSidebar }) {
 
 /* ── Right: detail pane ──────────────────────────────────────────── */
 
-function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar }) {
+function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFor, assigningFor, resolvingFor, highlightId, onResolve, onAskResolve, onCancelResolve, onResolveAll, onAskIncorrect, onMarkIncorrect, onAskAssign, onAssign, onOpenSidebar, onOpenSource, readOnly }) {
   const multi = items.length > 1
   // The pane can be heterogeneous (Intent / Assignee group spans customers).
   const sameCustomer = items.every((i) => i.customer_id === customerId)
@@ -690,7 +792,7 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
           <div className="flex items-center gap-2">{title}</div>
           <p className="mt-0.5 text-[11px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{subtitle}</p>
         </div>
-        {multi && sameCustomer && (
+        {!readOnly && multi && sameCustomer && (
           <button onClick={onResolveAll} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="done_all" size={14} /> Resolve all {items.length}</button>
         )}
       </div>
@@ -715,6 +817,8 @@ function RightPane({ customerId, items, groupBy, groupKey, isSingle, incorrectFo
             onAskAssign={() => { onAskIncorrect(null); onCancelResolve(); onAskAssign(it.action_item_id) }}
             onCancelAssign={() => onAskAssign(null)}
             onAssign={(userId) => onAssign(it.action_item_id, userId)}
+            readOnly={readOnly}
+            onOpenSource={onOpenSource}
           />
         ))}
       </div>
@@ -763,7 +867,7 @@ function ActivityTrail({ item }) {
 
 /* ── Right: item card ────────────────────────────────────────────── */
 
-function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign }) {
+function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign, askingResolve, onOpenSidebar, onAskResolve, onCancelResolve, onResolve, onAskIncorrect, onCancelIncorrect, onMarkIncorrect, onAskAssign, onCancelAssign, onAssign, readOnly, onOpenSource }) {
   const intent = INTENT_TAXONOMY[item.intent_id]
   const past = isPastSla(item)
   return (
@@ -778,10 +882,16 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           ) : (
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold tabular-nums" style={{ color: 'var(--spyne-text-secondary)' }}>
               <span className="inline-flex" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="schedule" size={14} /></span>
-              {ageLabel(ageMinutes(item))} · SLA {intent?.sla_hours ?? '?'}h
+              {ageLabel(ageMinutes(item))} · SLA {intent ? formatSla(intent.sla_hours) : '?'}
             </span>
           )}
         </span>
+      </div>
+
+      {/* Actual creation timestamp — the real date, alongside the relative age above */}
+      <div className="flex items-center gap-1 px-4 pt-1.5 text-[10.5px]" style={{ color: 'var(--spyne-text-muted)' }}>
+        <MaterialSymbol name="event" size={13} />
+        <span className="tabular-nums">Created {formatCreatedAt(item.created_at)}</span>
       </div>
 
       <div className="px-4 py-3">
@@ -797,8 +907,8 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           <div className="flex items-center gap-2">
             <span className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Source</span>
             <div className="ml-auto flex items-center gap-1">
-              <button title="Recording playback — coming soon" className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
-              <button title="Full transcript — coming soon" className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
+              <button onClick={() => onOpenSource?.(item, 'call')} disabled={!item.source_call_id} title={item.source_call_id ? 'Open the call' : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
+              <button onClick={() => onOpenSource?.(item, 'conversation')} disabled={!item.source_conversation_id} title={item.source_conversation_id ? 'Open the conversation' : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
             </div>
           </div>
           <p className="mt-0.5 text-[12px] italic leading-snug" style={{ color: 'var(--spyne-text-muted)' }}>“{item.source_message}”</p>
@@ -816,7 +926,7 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
       </div>
 
       {/* Actions */}
-      {askingResolve ? (
+      {!readOnly && (askingResolve ? (
         <ResolvePicker onResolve={onResolve} onCancel={onCancelResolve} />
       ) : askingAssign ? (
         <div className="border-t border-spyne-border px-4 py-3">
@@ -847,7 +957,7 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           <button onClick={onAskAssign} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="person_add" size={14} /> Assign</button>
           <button onClick={onAskIncorrect} className="spyne-btn-secondary !h-8 !text-[12px]"><MaterialSymbol name="flag" size={14} /> Incorrect</button>
         </div>
-      )}
+      ))}
     </div>
   )
 }
@@ -961,7 +1071,7 @@ function ClosedDetail({ item, onOpenSidebar }) {
       )}
       <div className="flex items-center gap-2">
         <Assignee userId={item.assignee_user_id} />
-        <span className="ml-auto inline-flex items-center gap-1 text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="schedule" size={14} /> SLA {intent?.sla_hours ?? '?'}h</span>
+        <span className="ml-auto inline-flex items-center gap-1 text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="schedule" size={14} /> SLA {intent ? formatSla(intent.sla_hours) : '?'}</span>
       </div>
       <div className="border-t border-spyne-border pt-2.5"><ActivityTrail item={item} /></div>
     </div>
@@ -1003,8 +1113,39 @@ function IncorrectList({ items, onUndo, onOpenSidebar }) {
 
 /* ── Rules / config drawer (read-only demo) ──────────────────────── */
 
-function RulesPanel({ onClose }) {
+function RulesPanel({ onClose, onEditSla }) {
   const [channelAuto, setChannelAuto] = useState(CHANNEL_AUTOCREATE_DEFAULTS)
+  // Editable per-intent SLA (session-only). Mutates INTENT_TAXONOMY in memory + bumps the
+  // parent's slaVersion so burn/sort/past-SLA recompute live; "Reset" restores SLA_DEFAULTS.
+  // Per-intent SLA draft as {value, unit} (unit ∈ m|h|d). Stored back as sla_hours.
+  const [slaDraft, setSlaDraft] = useState(() =>
+    Object.fromEntries(Object.values(INTENT_TAXONOMY).map((i) => [i.id, splitSla(i.sla_hours)])),
+  )
+  const commitHours = (id, hours) => {
+    INTENT_TAXONOMY[id].sla_hours = Math.max(1 / 60, Math.min(720, hours)) // 1 minute … 30 days
+    onEditSla?.()
+  }
+  const setSlaValue = (id, raw) => {
+    setSlaDraft((p) => {
+      const unit = p[id]?.unit ?? 'h'
+      const value = Math.max(0, parseFloat(String(raw)) || 0)
+      commitHours(id, value * SLA_UNIT_HOURS[unit])
+      return { ...p, [id]: { value, unit } }
+    })
+  }
+  const setSlaUnit = (id, unit) => {
+    // Re-express the current SLA in the chosen unit — the duration stays put, the number converts.
+    setSlaDraft((p) => {
+      const hours = INTENT_TAXONOMY[id].sla_hours
+      const value = unit === 'm' ? Math.round(hours * 60) : unit === 'd' ? round2(hours / 24) : round2(hours)
+      return { ...p, [id]: { value, unit } }
+    })
+  }
+  const resetSla = () => {
+    Object.values(INTENT_TAXONOMY).forEach((i) => { INTENT_TAXONOMY[i.id].sla_hours = SLA_DEFAULTS[i.id] })
+    setSlaDraft(Object.fromEntries(Object.values(INTENT_TAXONOMY).map((i) => [i.id, splitSla(SLA_DEFAULTS[i.id])])))
+    onEditSla?.()
+  }
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -1048,9 +1189,15 @@ function RulesPanel({ onClose }) {
             </div>
           </div>
 
-          {/* Department → intents routing */}
+          {/* Department → intents routing + editable per-intent SLA */}
           <div className="flex flex-col gap-2">
-            <SectionLabel glyph="account_tree" text="Department routing" />
+            <div className="flex items-center justify-between">
+              <SectionLabel glyph="account_tree" text="Intent routing & SLA" />
+              <button type="button" onClick={resetSla} className="spyne-btn-ghost !h-6 !text-[11px]">Reset SLAs</button>
+            </div>
+            <p className="text-[10.5px]" style={{ color: 'var(--spyne-text-muted)' }}>
+              Predefined intents (the tags). Per-intent SLA is editable in minutes, hours or days — session only, not saved.
+            </p>
             <div className="flex flex-col gap-2">
               {Object.entries(byDept).map(([dept, intents]) => (
                 <div key={dept} className="spyne-card p-3">
@@ -1060,9 +1207,35 @@ function RulesPanel({ onClose }) {
                   </div>
                   <ul className="flex flex-col gap-1">
                     {intents.map((i) => (
-                      <li key={i.id} className="flex items-center gap-2 rounded-md px-2 py-1.5" style={{ background: 'var(--spyne-page-bg)' }}>
-                        <span className="flex-1 text-[12px]" style={{ color: 'var(--spyne-text-secondary)' }}>{i.display_name}</span>
-                        <span className="inline-flex items-center gap-1 text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="schedule" size={14} /> SLA {i.sla_hours}h</span>
+                      <li key={i.id} className="flex items-center gap-2 rounded-md px-2 py-2" style={{ background: 'var(--spyne-page-bg)' }}>
+                        <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--spyne-text-secondary)' }} title={i.display_name}>{i.display_name}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={slaDraft[i.id]?.value ?? ''}
+                          onChange={(e) => setSlaValue(i.id, e.target.value)}
+                          className="spyne-input !h-7 w-14 px-1.5 text-right text-[12px] tabular-nums"
+                          aria-label={`SLA duration for ${i.display_name}`}
+                        />
+                        <div className="inline-flex shrink-0 overflow-hidden rounded-md border border-spyne-border">
+                          {SLA_UNITS.map(([u, lbl], idx) => {
+                            const on = (slaDraft[i.id]?.unit ?? 'h') === u
+                            return (
+                              <button
+                                key={u}
+                                type="button"
+                                onClick={() => setSlaUnit(i.id, u)}
+                                aria-pressed={on}
+                                title={`Set SLA in ${lbl.toLowerCase()}s`}
+                                className={cn('spyne-focus-ring h-7 px-2 text-[10.5px] font-bold uppercase tracking-wide transition-colors', idx > 0 && 'border-l border-spyne-border')}
+                                style={on ? { background: 'var(--spyne-primary)', color: '#fff' } : { background: 'var(--spyne-surface)', color: 'var(--spyne-text-muted)' }}
+                              >
+                                {lbl}
+                              </button>
+                            )
+                          })}
+                        </div>
                       </li>
                     ))}
                   </ul>

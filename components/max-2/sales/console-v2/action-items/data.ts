@@ -41,6 +41,9 @@ export interface ActionItem {
   repeat_caller_count: number;
   last_observed_at: string;
   escalation_reason?: "aged_past_sla" | "repeat_caller_threshold" | "compliance_flagged";
+  // Source linkage (from the backend): the originating call + conversation for this item.
+  source_call_id?: string;
+  source_conversation_id?: string;
 }
 
 export const INTENT_TAXONOMY: Record<IntentId, IntentMeta> = {
@@ -169,4 +172,42 @@ export function slaBurnRatio(item: ActionItem): number {
 
 export function deptOf(item: ActionItem): Dept {
   return INTENT_TAXONOMY[item.intent_id].dept;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Actual creation timestamp, e.g. "Jun 24, 2026 · 2:05 PM". Empty string if unparseable. */
+export function formatCreatedAt(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} · ${h}:${String(d.getMinutes()).padStart(2, "0")} ${ampm}`;
+}
+
+/** Compact calendar date, e.g. "Jun 24". For tight rows. */
+export function formatDateShort(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+/** Human SLA duration from hours — "30m" / "4h" / "2d" (mins→days). */
+export function formatSla(hours: number): string {
+  if (!hours || hours <= 0) return "—";
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours >= 24 && hours % 24 === 0) return `${hours / 24}d`;
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
+}
+
+/** Which calendar bucket an item was created in, relative to "now": today / yesterday / older. */
+export function createdDayKey(item: ActionItem): "today" | "yesterday" | "older" {
+  const now = new Date(NOW_MS);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const t = new Date(item.created_at).getTime();
+  if (isNaN(t)) return "older";
+  if (t >= startOfToday) return "today";
+  if (t >= startOfToday - 86_400_000) return "yesterday";
+  return "older";
 }
