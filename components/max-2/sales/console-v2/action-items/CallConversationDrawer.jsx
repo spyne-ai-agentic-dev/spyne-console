@@ -1,35 +1,43 @@
-"use client"
+'use client'
 
 /**
- * CallConversationDrawer — right-side detail pane, modeled 1:1 on the Vini Call-Logs drawer.
+ * CallConversationDrawer — read-only embed port of the production Call-Logs detail drawer
+ * (apps/converse-ai/components/Call-Logs/sidebar.tsx). Mirrors its exact layout, theme
+ * (#4600f2 primary, gray scale, purple/green chat avatars, green/orange/red AI scores),
+ * sections (Call ID · Key Highlights · Customer Information & Summary · AI Performance ·
+ * Appointment · Transcript), waveform player, and transcript click-to-seek.
  *
- *  - Call mode: loads the end-call report (recording, transcript, AI analysis) by callId.
- *  - Conversation mode: loads the customer's conversations; each row drills into its call.
- *
- * Tabs mirror prod exactly: Highlights · Customer · Summary · Appointment · Transcript.
- * For SMS/chat items the "Transcript" tab becomes "Conversation", the audio player is
- * hidden, and the thread auto-scrolls to the point where the action item was created.
- *
- * Props: { item, mode: 'call' | 'conversation', onClose }
+ * Call mode → end-call report by callId (waveform + rich sections).
+ * SMS/chat → inline smsMessages thread (no audio), auto-scrolled to the action-item creation point.
+ * Conversation mode lists the customer's conversations and auto-opens the source one.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MaterialSymbol } from '@/components/max-2/material-symbol'
-import { CHANNEL_META, CUSTOMERS, ageLabel, ageMinutes } from './data'
+import { AiOutlineLoading3Quarters } from 'react-icons/ai'
+import { FaArrowLeft, FaBolt, FaCalendar, FaClock, FaCopy, FaFileAlt, FaPlayCircle, FaRegComments, FaTimes, FaUser } from 'react-icons/fa'
+import { IoMdCall } from 'react-icons/io'
+import { MdOutlineError } from 'react-icons/md'
+import { CHANNEL_META, ageLabel, ageMinutes } from './data'
 import { fetchCallReport, fetchConversations } from './be-client'
 import { normalizeCallReport } from './be-mapper'
+import WaveformPlayer from './WaveformPlayer'
 
 const MESSAGING = new Set(['sms', 'chat'])
+const DRAWER_TABS = [
+  { id: 'highlights', label: 'Highlights' },
+  { id: 'customer', label: 'Customer' },
+  { id: 'summary', label: 'Summary' },
+  { id: 'appointment', label: 'Appointment' },
+  { id: 'transcript', label: 'Transcript' },
+]
 
-function fmtClock(sec) {
-  if (sec == null) return ''
-  const s = Math.max(0, Math.floor(sec))
+const fmtClock = (sec) => {
+  if (sec == null || isNaN(sec) || sec < 0) return '0:00'
+  const s = Math.floor(sec)
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
-
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-// Absolute timestamp for SMS turns (no call-relative seconds): "Jun 6, 2:02 PM".
-function fmtStamp(ms) {
+const fmtStamp = (ms) => {
   if (!ms) return ''
   const d = new Date(ms)
   if (isNaN(d.getTime())) return ''
@@ -38,291 +46,114 @@ function fmtStamp(ms) {
   h = h % 12 || 12
   return `${MON[d.getMonth()]} ${d.getDate()}, ${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`
 }
+const getScoreColor = (score) => (score >= 7 ? 'text-green-600' : score >= 5 ? 'text-orange-600' : 'text-red-600')
+const roleBadge = (role) => (role === 'agent'
+  ? { label: 'AI', bg: 'bg-purple-200', text: 'text-purple-700' }
+  : { label: 'CU', bg: 'bg-green-200', text: 'text-green-700' })
 
-// SMS conversations carry their thread inline in `smsMessages` (direction out=agent / in=customer,
-// body=text, createdAt=timestamp). Map to the shared turn shape, oldest-first.
 function smsTurns(conv) {
   const arr = Array.isArray(conv?.smsMessages) ? [...conv.smsMessages] : []
   arr.sort((a, b) => (Date.parse(a.createdAt || 0) || 0) - (Date.parse(b.createdAt || 0) || 0))
   return arr
-    .map((m) => ({
-      role: m.direction === 'out' ? 'agent' : 'customer',
-      text: m.body || m.message || m.text || '',
-      atSec: null,
-      atMs: m.createdAt ? Date.parse(m.createdAt) : null,
-    }))
+    .map((m) => ({ role: m.direction === 'out' ? 'agent' : 'customer', text: m.body || m.message || m.text || '', atSec: null, atMs: m.createdAt ? Date.parse(m.createdAt) : null }))
     .filter((m) => m.text)
 }
 
-function CopyIcon({ value, title = 'Copy' }) {
-  const [done, setDone] = useState(false)
-  if (!value) return null
+function SectionHeader({ label, icon: Icon, onCopy, isCopied }) {
   return (
-    <button
-      onClick={() => { try { navigator.clipboard?.writeText(String(value)); setDone(true); setTimeout(() => setDone(false), 1200) } catch {} }}
-      title={title}
-      className="spyne-focus-ring ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-spyne-page-bg"
-      style={{ color: 'var(--spyne-text-muted)' }}
-    >
-      <MaterialSymbol name={done ? 'check' : 'content_copy'} size={14} />
-    </button>
+    <h3 className="mb-4 flex items-center justify-between text-sm font-medium text-gray-900">
+      <div className="flex items-center gap-2"><Icon className="h-4 w-4 text-gray-700/30" /> {label}</div>
+      <button onClick={onCopy} className="h-8 w-8 rounded-md p-0 hover:bg-gray-100" title={isCopied ? 'Copied!' : `Copy ${label.toLowerCase()}`}>
+        <FaCopy className={`h-4 w-4 ${isCopied ? 'text-green-500' : 'text-gray-500'}`} />
+      </button>
+    </h3>
   )
 }
 
-function SectionHead({ icon, title, copyValue }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="inline-flex" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name={icon} size={16} /></span>
-      <span className="text-[12.5px] font-bold" style={{ color: 'var(--spyne-text-primary)' }}>{title}</span>
-      <CopyIcon value={copyValue} />
-    </div>
-  )
-}
-
-function SubLabel({ children }) {
-  return <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>{children}</p>
-}
-
-/* ── Highlights blocks ───────────────────────────────────────────── */
-
-function CallIdRow({ callId }) {
-  return (
-    <div className="spyne-card flex flex-col gap-1.5 p-3.5">
-      <SectionHead icon="tag" title="Call ID" copyValue={callId} />
-      <div className="break-all rounded-lg border border-spyne-border px-3 py-2 font-mono text-[11.5px]" style={{ background: 'var(--spyne-page-bg)', color: 'var(--spyne-text-secondary)' }}>{callId || '—'}</div>
-    </div>
-  )
-}
-
-function KeyHighlights({ points }) {
-  if (!points?.length) return null
-  return (
-    <div className="spyne-card flex flex-col gap-2.5 p-3.5">
-      <SectionHead icon="lightbulb" title="Key Highlights" copyValue={points.join('\n')} />
-      <ol className="flex flex-col gap-2">
-        {points.map((p, i) => (
-          <li key={i} className="flex gap-2.5">
-            <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold tabular-nums" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}>{i + 1}</span>
-            <span className="text-[12.5px] leading-snug" style={{ color: 'var(--spyne-text-secondary)' }}>{p}</span>
-          </li>
-        ))}
-      </ol>
-    </div>
-  )
-}
-
-function PersonRow({ icon, label, value }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full" style={{ background: 'var(--spyne-page-bg)', color: 'var(--spyne-text-muted)' }}><MaterialSymbol name={icon} size={16} /></span>
-      <div className="min-w-0">
-        <p className="text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>{label}</p>
-        <p className="truncate text-[13px] font-semibold" style={{ color: 'var(--spyne-text-primary)' }}>{value || '—'}</p>
-      </div>
-    </div>
-  )
-}
-
-function SummaryActionItems({ summaryText, actionItems, summaryLabel = 'Call Summary' }) {
-  return (
-    <div className="flex flex-col gap-2.5">
-      <SubLabel>Summary &amp; Action Items</SubLabel>
-      <div>
-        <p className="mb-1 text-[11px] font-semibold" style={{ color: 'var(--spyne-text-muted)' }}>{summaryLabel}</p>
-        <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--spyne-text-secondary)' }}>{summaryText || '—'}</p>
-      </div>
-      {actionItems?.length > 0 && (
-        <div className="rounded-lg border-l-[3px] px-3 py-2.5" style={{ borderColor: 'var(--spyne-primary)', background: 'var(--spyne-primary-soft)' }}>
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-primary)' }}>Next Action Required</p>
-          <ul className="flex flex-col gap-1">
-            {actionItems.map((a, i) => (
-              <li key={i} className="flex gap-1.5 text-[12px] leading-snug" style={{ color: 'var(--spyne-text-primary)' }}>
-                <span style={{ color: 'var(--spyne-primary)' }}>•</span><span>{a}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CustomerInfoSummary({ name, phone, summaryText, actionItems }) {
-  const copy = [name, phone, summaryText, ...(actionItems || [])].filter(Boolean).join('\n')
-  return (
-    <div className="spyne-card flex flex-col gap-3.5 p-3.5">
-      <SectionHead icon="person" title="Customer Information & Summary" copyValue={copy} />
-      <div className="flex flex-col gap-2.5">
-        <SubLabel>Customer Information</SubLabel>
-        <PersonRow icon="person" label="Customer Name" value={name} />
-        <PersonRow icon="call" label="Phone Number" value={phone} />
-      </div>
-      <div className="border-t border-spyne-border pt-3.5">
-        <SummaryActionItems summaryText={summaryText} actionItems={actionItems} />
-      </div>
-    </div>
-  )
-}
-
-/* ── AI Performance ──────────────────────────────────────────────── */
-
-function Stat({ label, value }) {
-  return (
-    <div>
-      <p className="text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>{label}</p>
-      <p className="text-[20px] font-bold leading-tight tabular-nums" style={{ color: value === '—' ? 'var(--spyne-text-muted)' : 'var(--spyne-success-text)' }}>{value}</p>
-    </div>
-  )
-}
-
-function BulletBox({ tone, title, items, icon }) {
-  const c = tone === 'success'
-    ? { bg: 'var(--spyne-success-subtle)', bd: 'var(--spyne-success-muted)', ink: 'var(--spyne-success-text)' }
-    : { bg: 'var(--spyne-warning-subtle)', bd: 'var(--spyne-warning-muted)', ink: 'var(--spyne-warning-text)' }
-  return (
-    <div className="rounded-lg border px-3 py-2.5" style={{ background: c.bg, borderColor: c.bd }}>
-      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide" style={{ color: c.ink }}>{title}</p>
-      <ul className="flex flex-col gap-1.5">
-        {items.map((t, i) => (
-          <li key={i} className="flex gap-1.5 text-[12px] leading-snug" style={{ color: 'var(--spyne-text-secondary)' }}>
-            <span className="mt-0.5 inline-flex shrink-0" style={{ color: c.ink }}><MaterialSymbol name={icon} size={14} /></span><span>{t}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function AiPerformance({ aiQuality }) {
-  const q = aiQuality || {}
-  const hasAny = q.score != null || q.relevanceClarity != null || q.didWell?.length || q.improve?.length
-  if (!hasAny) return null
-  const copy = `Overall ${q.score ?? '—'}/10 · Relevance ${q.relevanceClarity ?? '—'}/10`
-  return (
-    <div className="spyne-card flex flex-col gap-3 p-3.5">
-      <SectionHead icon="bolt" title="AI Performance Analysis" copyValue={copy} />
-      <div className="grid grid-cols-2 gap-3">
-        <Stat label="Overall Score" value={q.score != null ? `${q.score} / 10` : '—'} />
-        <Stat label="Relevance & Clarity" value={q.relevanceClarity != null ? `${q.relevanceClarity} / 10` : '—'} />
-      </div>
-      {q.didWell?.length > 0 && <BulletBox tone="success" title="What AI Did Well" items={q.didWell} icon="check_circle" />}
-      {q.improve?.length > 0 && <BulletBox tone="warning" title="Areas for Improvement" items={q.improve} icon="lightbulb" />}
-    </div>
-  )
-}
-
-/* ── Appointment ─────────────────────────────────────────────────── */
-
-function AppointmentBlock({ appointment }) {
-  const a = appointment || {}
-  // Match prod: an empty appointmentDetails reads as "No appointment scheduled" even when the
-  // scheduled flag is set (a callback is surfaced under Next Action, not here).
-  const has = (a.details && a.details.length > 0) || !!a.type
-  return (
-    <div className="spyne-card flex flex-col gap-2.5 p-3.5">
-      <SectionHead icon="event" title="Appointment" />
-      {has ? (
-        <div className="flex flex-col gap-1.5 text-[12.5px]" style={{ color: 'var(--spyne-text-secondary)' }}>
-          {a.type ? <p><span className="font-semibold" style={{ color: 'var(--spyne-text-primary)' }}>Type:</span> {a.type}</p> : null}
-          {(a.details || []).map((d, i) => <p key={i}>{d}</p>)}
-        </div>
-      ) : (
-        <p className="py-6 text-center text-[12px]" style={{ color: 'var(--spyne-text-muted)' }}>No appointment scheduled</p>
-      )}
-    </div>
-  )
-}
-
-/* ── Transcript / Conversation ───────────────────────────────────── */
-
-function MessageTurns({ messages, transcript, isMessaging, scrollToMs }) {
+/* ── Transcript turns (calls: click-to-seek; SMS: absolute time, no audio) ── */
+function TranscriptTurns({ turns, isMessaging, activeIndex, scrollToMs, onSeek, registerRef }) {
   const markerRef = useRef(null)
-
-  // Parse fallback transcript string ("AI: …\nCustomer: …") when structured messages are absent.
-  const turns = useMemo(() => {
-    if (Array.isArray(messages) && messages.length) return messages
-    return (transcript || '')
-      .split('\n').map((l) => l.trim()).filter(Boolean)
-      .map((line) => {
-        const m = line.match(/^([A-Za-z][\w ]{0,18}):\s*(.*)$/)
-        const who = m ? m[1] : ''
-        const text = m ? m[2] : line
-        return { role: /^(ai|assistant|agent|vini|emily|bot)/i.test(who) ? 'agent' : 'customer', text, atSec: null, atMs: null }
-      })
-  }, [messages, transcript])
-
-  // The turn nearest the action-item creation time → the SMS scroll target.
   const markerIdx = useMemo(() => {
     if (!isMessaging || !scrollToMs) return -1
     let best = -1, bestD = Infinity
     turns.forEach((m, i) => { if (m.atMs) { const d = Math.abs(m.atMs - scrollToMs); if (d < bestD) { bestD = d; best = i } } })
     return best
   }, [turns, scrollToMs, isMessaging])
+  useEffect(() => { if (markerIdx >= 0) { const t = setTimeout(() => markerRef.current?.scrollIntoView({ block: 'center' }), 80); return () => clearTimeout(t) } }, [markerIdx])
 
-  const jumpToMarker = () => markerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  useEffect(() => { if (markerIdx >= 0) { const t = setTimeout(() => markerRef.current?.scrollIntoView({ block: 'center' }), 60); return () => clearTimeout(t) } }, [markerIdx])
-
-  if (!turns.length) return <p className="py-6 text-center text-[12px]" style={{ color: 'var(--spyne-text-muted)' }}>No {isMessaging ? 'conversation' : 'transcript'} available.</p>
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <SectionHead icon={isMessaging ? 'forum' : 'description'} title={isMessaging ? 'Conversation' : 'Transcript'} copyValue={turns.map((t) => `${t.role === 'agent' ? 'Agent' : 'Customer'}: ${t.text}`).join('\n')} />
+  if (!turns.length) {
+    return (
+      <div className="py-8 text-center">
+        <FaFileAlt className="mx-auto mb-3 h-12 w-12 text-gray-300" />
+        <p className="text-sm text-gray-500">No {isMessaging ? 'conversation' : 'transcript'} available</p>
       </div>
-      {markerIdx >= 0 && (
-        <button onClick={jumpToMarker} className="spyne-focus-ring inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}>
-          <MaterialSymbol name="my_location" size={13} /> Jump to where this item was created
-        </button>
-      )}
-      <div className="flex flex-col gap-3">
-        {turns.map((m, i) => {
-          const agent = m.role === 'agent'
-          const isMarker = i === markerIdx
-          return (
-            <div key={i} ref={isMarker ? markerRef : null} className="flex flex-col gap-2">
-              {isMarker && (
-                <div className="flex items-center gap-2 py-0.5">
-                  <span className="h-px flex-1" style={{ background: 'var(--spyne-primary)' }} />
-                  <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}><MaterialSymbol name="bookmark" size={12} /> Action item created</span>
-                  <span className="h-px flex-1" style={{ background: 'var(--spyne-primary)' }} />
-                </div>
-              )}
-              <div className="flex gap-2.5">
-                <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-[9.5px] font-bold" style={agent ? { background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' } : { background: 'var(--spyne-page-bg)', color: 'var(--spyne-text-muted)' }}>{agent ? 'AI' : 'CU'}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10.5px] font-bold" style={{ color: agent ? 'var(--spyne-primary)' : 'var(--spyne-text-secondary)' }}>{agent ? 'Agent' : 'Customer'}</span>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      {turns.map((m, index) => {
+        const b = roleBadge(m.role)
+        const isActive = activeIndex === index
+        const isMarker = index === markerIdx
+        const clickable = !isMessaging && m.atSec != null
+        return (
+          <div key={index} ref={(el) => { registerRef?.(index, el); if (isMarker) markerRef.current = el }}>
+            {isMarker && (
+              <div className="mb-3 flex items-center gap-2">
+                <span className="h-px flex-1 bg-[#4600f2]" />
+                <span className="rounded-full bg-[#4600f2]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#4600f2]">Action item created</span>
+                <span className="h-px flex-1 bg-[#4600f2]" />
+              </div>
+            )}
+            <div
+              onClick={() => clickable && onSeek?.(m.atSec)}
+              className={`overflow-hidden rounded-xl border p-4 transition-all ${clickable ? 'cursor-pointer' : ''} ${
+                isActive ? 'border-[#4600f2] bg-[#4600f2]/10 shadow-md ring-2 ring-[#4600f2]/30'
+                  : 'border-gray-200 bg-gray-50 ' + (clickable ? 'hover:border-[#4600f2] hover:bg-[#4600f2]/5' : '')
+              }`}
+              title={clickable ? 'Click to jump to this point in audio' : undefined}
+            >
+              <div className="flex gap-3">
+                <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-[#4600f2] text-white' : `${b.bg} ${b.text}`}`}>{b.label}</div>
+                <div className="flex-1">
+                  <div className="mb-2 flex items-baseline gap-3">
+                    <span className={`font-semibold ${isActive ? 'text-[#4600f2]' : 'text-gray-900'}`}>{m.role === 'agent' ? 'Agent' : 'Customer'}</span>
                     {m.atSec != null
-                      ? <span className="text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{fmtClock(m.atSec)}</span>
-                      : m.atMs ? <span className="text-[10px] tabular-nums" style={{ color: 'var(--spyne-text-muted)' }}>{fmtStamp(m.atMs)}</span> : null}
+                      ? <span className={`text-xs ${isActive ? 'font-medium text-[#4600f2]' : 'text-[#4600f2]'} hover:underline`}>{fmtClock(m.atSec)}</span>
+                      : m.atMs ? <span className="text-xs text-gray-500">{fmtStamp(m.atMs)}</span> : null}
                   </div>
-                  <p className="mt-0.5 text-[12.5px] leading-snug" style={{ color: 'var(--spyne-text-secondary)' }}>{m.text}</p>
+                  <div className={`leading-relaxed ${isActive ? 'text-gray-800' : 'text-gray-700'}`}>{m.text}</div>
                 </div>
               </div>
             </div>
-          )
-        })}
-      </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-/* ── Drawer ──────────────────────────────────────────────────────── */
-
-const baseTabs = (msgLabel) => ['Highlights', 'Customer', 'Summary', 'Appointment', msgLabel]
-
 export default function CallConversationDrawer({ item, mode, onClose }) {
   const isMessaging = MESSAGING.has(item?.source_channel)
-  const msgLabel = isMessaging ? 'Conversation' : 'Transcript'
-  const TABS = baseTabs(msgLabel)
 
-  const [tab, setTab] = useState('Highlights')
+  const [activeTab, setActiveTab] = useState('highlights')
   const [viewCallId, setViewCallId] = useState(mode === 'call' ? (item?.source_call_id || null) : null)
-  const [smsView, setSmsView] = useState(null) // an SMS conversation object (rendered from inline smsMessages)
+  const [smsView, setSmsView] = useState(null)
   const [report, setReport] = useState(null)
   const [convs, setConvs] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [copied, setCopied] = useState(null)
+  const [audioTime, setAudioTime] = useState(0)
+  const [audioPlaying, setAudioPlaying] = useState(false)
+
+  const waveRef = useRef(null)
+  const contentRef = useRef(null)
+  const transcriptRefs = useRef(new Map())
+
+  const copy = useCallback((text, section) => {
+    try { navigator.clipboard?.writeText(text); setCopied(section); setTimeout(() => setCopied(null), 2000) } catch {}
+  }, [])
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
@@ -330,7 +161,6 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Conversation mode: load the customer's conversations (scoped to the embed's department).
   useEffect(() => {
     if (mode !== 'conversation' || !item?.customer_id) return
     let cancelled = false
@@ -339,7 +169,6 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
       .then((r) => {
         if (cancelled) return
         setConvs(r.conversations)
-        // Land directly on the conversation this action item was created from.
         const src = (r.conversations || []).find((c) => (c.conversationId || c._id) === item.source_conversation_id)
         if (src) {
           if (src.callId) setViewCallId(src.callId)
@@ -351,7 +180,6 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
     return () => { cancelled = true }
   }, [mode, item?.customer_id])
 
-  // Load the call report whenever a call is being viewed.
   useEffect(() => {
     if (!viewCallId) return
     let cancelled = false
@@ -363,137 +191,236 @@ export default function CallConversationDrawer({ item, mode, onClose }) {
     return () => { cancelled = true }
   }, [viewCallId])
 
+  const messages = report?.messages || []
+  const activeTranscriptIndex = useMemo(() => {
+    if (!audioPlaying || !messages.length) return -1
+    for (let i = messages.length - 1; i >= 0; i--) { if ((messages[i].atSec ?? Infinity) <= audioTime) return i }
+    return -1
+  }, [audioTime, messages, audioPlaying])
+
+  // Audio playing → keep Transcript tab active + auto-scroll the active turn.
+  useEffect(() => { if (audioPlaying) setActiveTab('transcript') }, [audioPlaying])
+  useEffect(() => {
+    if (activeTranscriptIndex >= 0 && audioPlaying) transcriptRefs.current.get(activeTranscriptIndex)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [activeTranscriptIndex, audioPlaying])
+
+  // Scroll-spy: highlight the tab whose section is in view (mirrors production).
+  useEffect(() => {
+    if (!viewCallId || loading) return
+    const root = contentRef.current
+    if (!root) return
+    const visible = new Set()
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach((e) => { const id = e.target.id.replace('section-', ''); e.isIntersecting ? visible.add(id) : visible.delete(id) })
+      requestAnimationFrame(() => {
+        if (audioPlaying) { setActiveTab('transcript'); return }
+        for (const t of DRAWER_TABS) if (visible.has(t.id)) { setActiveTab(t.id); return }
+      })
+    }, { root, rootMargin: '-10% 0px -70% 0px', threshold: 0 })
+    const els = []
+    DRAWER_TABS.forEach((t) => { const el = document.getElementById(`section-${t.id}`); if (el) { obs.observe(el); els.push(el) } })
+    return () => { els.forEach((el) => obs.unobserve(el)); obs.disconnect() }
+  }, [viewCallId, loading, report, audioPlaying])
+
   if (typeof document === 'undefined' || !item) return null
 
-  const cust = CUSTOMERS[item.customer_id]
-  const name = report?.customerName ?? cust?.name ?? item.customer_name ?? 'Unknown'
-  const phone = report?.customerMobile ?? cust?.phone ?? ''
   const channel = CHANNEL_META[item.source_channel]
-  const showCallDetail = !!viewCallId
   const inConvList = mode === 'conversation' && !viewCallId && !smsView
+  const showCallDetail = !!viewCallId
   const scrollToMs = item.created_at ? Date.parse(item.created_at) : null
-
   const ageMin = report?.createdAt ? Math.floor((Date.now() - Date.parse(report.createdAt)) / 60000) : ageMinutes(item)
-  const title = report?.title || report?.outcome || item.intent_recap || (isMessaging ? 'Conversation' : 'Call detail')
+  const drilledIn = mode === 'conversation' && (viewCallId || smsView)
+
+  // Derived call fields (production mapping).
+  const customerName = report?.customerName || item.customer_name || 'Unknown'
+  const phoneNumber = report?.customerMobile || 'N/A'
+  const highlights = report?.summaryPoints || []
+  const callSummary = report?.analysisSummary || report?.summaryText || ''
+  const actionItems = report?.actionItems || []
+  const q = report?.aiQuality || {}
+  const aiScore = parseFloat(q.score) || 0
+  const appt = report?.appointment || {}
+  const title = report?.title || item.intent_recap || (isMessaging ? 'Conversation' : 'Call received but the customer did not speak')
+
+  const seek = (sec) => { waveRef.current?.seek(sec); waveRef.current?.play() }
+
+  const headerIcon = drilledIn ? null : (isMessaging ? FaRegComments : IoMdCall)
 
   const body = (
     <div className="console-v2-sales-root">
       <div onClick={onClose} className="fixed inset-0 z-[199]" style={{ background: 'rgba(15,23,42,0.45)' }} />
-      <div className="spyne-float spyne-animate-slide-up fixed right-0 top-0 z-[200] flex h-full w-[480px] max-w-[94vw] flex-col" style={{ background: 'var(--spyne-surface)' }} role="dialog" aria-modal="true" aria-label={isMessaging ? 'Conversation detail' : 'Call detail'}>
+      <div className="fixed right-0 top-0 z-[200] flex h-screen w-[500px] max-w-[96vw] flex-col bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label={isMessaging ? 'Conversation detail' : 'Call detail'}>
         {/* Header */}
-        <div className="flex flex-shrink-0 items-start gap-2.5 border-b border-spyne-border px-4 py-3.5">
-          {mode === 'conversation' && (viewCallId || smsView) ? (
-            <button onClick={() => { setViewCallId(null); setSmsView(null); setReport(null); setTab('Highlights') }} aria-label="Back to conversations" className="spyne-focus-ring mt-0.5 inline-flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="arrow_back" size={18} /></button>
-          ) : (
-            <span className="mt-0.5 inline-flex size-8 items-center justify-center rounded-lg" style={{ background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}><MaterialSymbol name={isMessaging ? (channel?.symbol || 'forum') : 'call'} size={16} /></span>
-          )}
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-bold leading-snug" style={{ color: 'var(--spyne-text-primary)' }}>{title}</h2>
-            <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px]" style={{ color: 'var(--spyne-text-muted)' }}>
-              <MaterialSymbol name="schedule" size={13} /> {ageLabel(ageMin)}
-              {channel ? <span className="inline-flex items-center gap-1">· <MaterialSymbol name={channel.symbol} size={13} /> {channel.label}</span> : null}
-              {!isMessaging && report?.durationSec != null ? <span>· {fmtClock(report.durationSec)}</span> : null}
-            </p>
+        <div className="flex-none border-b border-gray-100 bg-white px-6 pb-5 pt-4">
+          <div className="flex items-start gap-3">
+            {drilledIn ? (
+              <button onClick={() => { setViewCallId(null); setSmsView(null); setReport(null); setActiveTab('highlights') }} className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500 hover:bg-gray-200" title="Back"><FaArrowLeft className="h-4 w-4" /></button>
+            ) : (
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100">{headerIcon && headerIcon === IoMdCall ? <IoMdCall className="h-6 w-6 text-gray-500" /> : <FaRegComments className="h-5 w-5 text-gray-500" />}</div>
+            )}
+            <div className="min-w-0 flex-1">
+              <h1 className="mb-1.5 break-words text-xl font-semibold text-gray-900">{title}</h1>
+              <div className="flex items-center gap-4 text-sm text-gray-500">
+                <div className="flex items-center gap-2"><FaClock className="h-4 w-4" /> <span>{ageLabel(ageMin)}</span></div>
+                {channel ? <span className="text-gray-400">· {channel.label}</span> : null}
+              </div>
+            </div>
+            <button onClick={onClose} className="flex-shrink-0 rounded-lg p-2 text-gray-400 transition-all hover:bg-gray-100 hover:text-gray-600"><FaTimes className="h-5 w-5" /></button>
           </div>
-          <button onClick={onClose} aria-label="Close" className="spyne-focus-ring inline-flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="close" size={20} /></button>
         </div>
 
-        {loading && <div className="flex flex-1 items-center justify-center text-[12px]" style={{ color: 'var(--spyne-text-muted)' }}>Loading…</div>}
-        {error && !loading && <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px]" style={{ color: 'var(--spyne-danger-text)' }}>Couldn’t load detail: {error}</div>}
+        {loading && <div className="flex flex-1 items-center justify-center"><AiOutlineLoading3Quarters className="h-8 w-8 animate-spin text-[#4600f2]" /></div>}
+        {error && !loading && <div className="flex flex-1 items-center justify-center px-6 text-center"><p className="text-sm text-gray-500">Couldn’t load detail: {error}</p></div>}
 
-        {/* Conversation list (pick a thread to open) */}
+        {/* Conversation list */}
         {!loading && !error && inConvList && (
-          <div className="flex flex-1 flex-col gap-2 overflow-y-auto px-4 py-4">
-            <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>{name}'s conversations</p>
+          <div className="flex-1 space-y-2 overflow-y-auto bg-gray-50/50 px-6 py-6">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{customerName}'s conversations</p>
             {(convs || []).length === 0 ? (
-              <p className="text-[12px]" style={{ color: 'var(--spyne-text-muted)' }}>No conversations found.</p>
-            ) : (
-              (convs || []).map((c) => {
-                const isThis = (c.conversationId || c._id) === item.source_conversation_id
-                const smsCount = Array.isArray(c.smsMessages) ? c.smsMessages.length : 0
-                const isSms = (c.type === 'sms' || c.type === 'chat') || (!c.callId && smsCount > 0)
-                const openable = !!c.callId || smsCount > 0
-                const lastSms = smsCount > 0 ? (c.smsMessages.find((m) => (m.body || m.message))?.body || '') : ''
-                const open = () => { if (c.callId) setViewCallId(c.callId); else if (smsCount > 0) setSmsView(c) }
-                return (
-                  <button key={c.conversationId || c._id} onClick={open} disabled={!openable}
-                    className="spyne-card flex flex-col gap-1 p-3 text-left transition-colors hover:border-spyne-primary disabled:cursor-not-allowed disabled:opacity-50"
-                    style={isThis ? { borderColor: 'var(--spyne-primary)' } : undefined}>
-                    <div className="flex items-center gap-2">
-                      <span className="spyne-badge spyne-badge-neutral inline-flex items-center gap-1" style={{ fontSize: 10 }}><MaterialSymbol name={isSms ? 'sms' : 'call'} size={12} /> {c.type || (isSms ? 'sms' : 'call')}</span>
-                      {isThis ? <span className="spyne-badge" style={{ fontSize: 10, background: 'var(--spyne-primary-soft)', color: 'var(--spyne-primary)' }}>this item</span> : null}
-                      <span className="ml-auto text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>{c.status}</span>
-                    </div>
-                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--spyne-text-primary)' }}>{c.callTitle || (isSms ? 'SMS conversation' : 'Conversation')}</span>
-                    {c.summary ? <span className="line-clamp-2 text-[11.5px]" style={{ color: 'var(--spyne-text-muted)' }}>{Array.isArray(c.summary) ? c.summary.join(' ') : c.summary}</span>
-                      : lastSms ? <span className="line-clamp-2 text-[11.5px]" style={{ color: 'var(--spyne-text-muted)' }}>{lastSms}</span> : null}
-                    {openable ? <span className="mt-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold" style={{ color: 'var(--spyne-primary)' }}><MaterialSymbol name={isSms ? 'forum' : 'play_circle'} size={13} /> Open {isSms ? `conversation${smsCount ? ` · ${smsCount} msgs` : ''}` : 'call'}</span>
-                      : <span className="mt-0.5 text-[10px]" style={{ color: 'var(--spyne-text-muted)' }}>No transcript available</span>}
-                  </button>
-                )
-              })
-            )}
+              <p className="text-sm text-gray-500">No conversations found.</p>
+            ) : (convs || []).map((c) => {
+              const isThis = (c.conversationId || c._id) === item.source_conversation_id
+              const smsCount = Array.isArray(c.smsMessages) ? c.smsMessages.length : 0
+              const isSms = c.type === 'sms' || c.type === 'chat' || (!c.callId && smsCount > 0)
+              const openable = !!c.callId || smsCount > 0
+              return (
+                <button key={c.conversationId || c._id} disabled={!openable}
+                  onClick={() => { if (c.callId) setViewCallId(c.callId); else if (smsCount > 0) setSmsView(c) }}
+                  className={`flex w-full flex-col gap-1 rounded-lg border bg-white p-3 text-left transition-colors hover:border-[#4600f2] disabled:cursor-not-allowed disabled:opacity-50 ${isThis ? 'border-[#4600f2]' : 'border-gray-200'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{isSms ? <FaRegComments className="h-3 w-3" /> : <IoMdCall className="h-3 w-3" />} {c.type || (isSms ? 'sms' : 'call')}</span>
+                    {isThis ? <span className="rounded-full bg-[#4600f2]/10 px-2 py-0.5 text-[10px] font-semibold text-[#4600f2]">this item</span> : null}
+                    <span className="ml-auto text-[10px] text-gray-400">{c.status}</span>
+                  </div>
+                  <span className="text-[13px] font-semibold text-gray-900">{c.callTitle || (isSms ? 'SMS conversation' : 'Conversation')}</span>
+                  {openable ? <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-[#4600f2]">{isSms ? <FaRegComments className="h-3 w-3" /> : <FaPlayCircle className="h-3 w-3" />} Open {isSms ? `conversation${smsCount ? ` · ${smsCount} msgs` : ''}` : 'call'}</span> : <span className="mt-0.5 text-[10px] text-gray-400">No transcript available</span>}
+                </button>
+              )
+            })}
           </div>
         )}
 
-        {/* Detail */}
+        {/* SMS / chat thread (no audio, no report sections) */}
+        {!loading && !error && smsView && (
+          <div className="flex-1 overflow-y-auto bg-gray-50/50 px-6 py-6">
+            <SectionHeader label="Conversation" icon={FaRegComments} onCopy={() => copy(smsTurns(smsView).map((t) => `${t.role === 'agent' ? 'Agent' : 'Customer'}: ${t.text}`).join('\n'), 'sms')} isCopied={copied === 'sms'} />
+            <TranscriptTurns turns={smsTurns(smsView)} isMessaging scrollToMs={scrollToMs} />
+          </div>
+        )}
+
+        {/* Call detail — production sections */}
         {!loading && !error && showCallDetail && (
           <>
-            {/* Audio player — calls only (hidden for SMS/chat) */}
-            {!isMessaging && report?.recordingUrl ? (
-              <div className="flex-shrink-0 border-b border-spyne-border px-4 py-3">
-                {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                <audio controls preload="none" src={report.recordingUrl} className="w-full" style={{ height: 36 }} />
-              </div>
-            ) : null}
-
-            <div className="flex flex-shrink-0 gap-3 overflow-x-auto border-b border-spyne-border px-4">
-              {TABS.map((t) => (
-                <button key={t} onClick={() => setTab(t)} className="spyne-focus-ring -mb-px shrink-0 border-b-2 py-2 text-[12px] font-semibold transition-colors" style={{ borderColor: tab === t ? 'var(--spyne-primary)' : 'transparent', color: tab === t ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}>{t}</button>
-              ))}
+            <div className="flex-none border-b border-gray-100 bg-white px-6 pb-4">
+              {!isMessaging ? <WaveformPlayer key={viewCallId} ref={waveRef} url={report?.recordingUrl || ''} onTimeUpdate={setAudioTime} onPlay={() => setAudioPlaying(true)} onPause={() => setAudioPlaying(false)} /> : null}
+            </div>
+            <div className="flex-none border-b border-gray-100 bg-white px-6">
+              <nav className="flex space-x-3 overflow-x-auto">
+                {DRAWER_TABS.map((t) => (
+                  <button key={t.id} onClick={() => { setActiveTab(t.id); document.getElementById(`section-${t.id}`)?.scrollIntoView({ behavior: 'smooth' }) }}
+                    className={`whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium transition-colors ${activeTab === t.id ? 'border-[#4600f2] text-[#4600f2]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                    {t.id === 'transcript' && isMessaging ? 'Conversation' : t.label}
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            <div className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-4">
-              {tab === 'Highlights' && (
-                <>
-                  <CallIdRow callId={viewCallId} />
-                  <KeyHighlights points={report?.summaryPoints} />
-                  <CustomerInfoSummary name={name} phone={phone} summaryText={report?.summaryText} actionItems={report?.actionItems} />
-                </>
-              )}
-              {tab === 'Customer' && (
-                <>
-                  <CustomerInfoSummary name={name} phone={phone} summaryText={report?.summaryText} actionItems={report?.actionItems} />
-                  <AiPerformance aiQuality={report?.aiQuality} />
-                </>
-              )}
-              {tab === 'Summary' && (
-                <>
-                  <div className="spyne-card flex flex-col gap-3.5 p-3.5">
-                    <SummaryActionItems summaryText={report?.summaryText} actionItems={report?.actionItems} />
+            <div ref={contentRef} className="flex-1 space-y-8 overflow-y-auto bg-gray-50/50 px-6 py-6">
+              {/* Call ID */}
+              <div className="space-y-3">
+                <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-gray-900"><IoMdCall className="h-4 w-4 text-gray-700/30" /> Call ID</h3>
+                <div className="flex w-full items-center gap-2 rounded-[8px] bg-gray-100 px-3 py-2 text-xs font-medium text-gray-700" title={viewCallId}>
+                  <span className="min-w-0 flex-1 truncate font-mono">{viewCallId}</span>
+                  <button type="button" onClick={() => copy(viewCallId, 'callId')} className="flex-shrink-0 rounded p-0.5 transition-colors hover:bg-gray-200" title={copied === 'callId' ? 'Copied!' : 'Copy Call ID'}><FaCopy className={`h-3.5 w-3.5 ${copied === 'callId' ? 'text-green-500' : 'text-gray-500'}`} /></button>
+                </div>
+              </div>
+
+              {/* Key Highlights */}
+              <div id="section-highlights" className="space-y-3">
+                <SectionHeader label="Key Highlights" icon={MdOutlineError} onCopy={() => copy(highlights.join('\n'), 'highlights')} isCopied={copied === 'highlights'} />
+                <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-5">
+                  {highlights.length > 0 ? (
+                    <ul className="space-y-4">{highlights.map((h, i) => (
+                      <li key={i} className="flex gap-4"><span className="mt-0.5 w-4 flex-shrink-0 text-sm font-medium text-gray-400">{i + 1}.</span><span className="text-sm leading-relaxed text-gray-700">{h}</span></li>
+                    ))}</ul>
+                  ) : <p className="text-sm text-gray-500">No highlights available</p>}
+                </div>
+              </div>
+
+              {/* Customer Information & Summary */}
+              <div id="section-customer" className="space-y-3">
+                <SectionHeader label="Customer Information & Summary" icon={FaUser} onCopy={() => copy(`Customer: ${customerName}\nPhone: ${phoneNumber}\nSummary: ${callSummary}\nAction Items: ${actionItems.join(', ')}`, 'customer')} isCopied={copied === 'customer'} />
+                <div className="space-y-6 rounded-lg border border-gray-200 bg-white p-5">
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 border-b border-gray-100 pb-2"><FaUser className="h-4 w-4 text-gray-600" /><span className="text-xs font-semibold uppercase tracking-wide text-gray-600">Customer Information</span></div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#DAEAFE]"><FaUser className="h-4 w-4 text-[#5c97df]" /></div>
+                      <div className="flex-1"><div className="mb-1 text-xs font-medium text-gray-500">Customer Name</div><div className="text-sm font-medium text-gray-900">{customerName}</div></div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-green-100"><IoMdCall className="h-4 w-4 text-[#5c97df]" /></div>
+                      <div className="flex-1"><div className="mb-1 text-xs font-medium text-gray-500">Phone Number</div><div className="font-mono text-sm text-gray-900">{phoneNumber}</div></div>
+                    </div>
                   </div>
-                  <AiPerformance aiQuality={report?.aiQuality} />
-                  <AppointmentBlock appointment={report?.appointment} />
-                  <MessageTurns messages={report?.messages} transcript={report?.transcript} isMessaging={isMessaging} scrollToMs={scrollToMs} />
-                </>
-              )}
-              {tab === 'Appointment' && <AppointmentBlock appointment={report?.appointment} />}
-              {tab === msgLabel && <MessageTurns messages={report?.messages} transcript={report?.transcript} isMessaging={isMessaging} scrollToMs={scrollToMs} />}
+                  <div id="section-summary" className="space-y-4">
+                    <div className="flex items-center gap-2 border-b border-gray-100 pb-2"><FaFileAlt className="h-4 w-4 text-gray-600" /><span className="text-xs font-semibold uppercase tracking-wide text-gray-600">Summary & Action Items</span></div>
+                    <div className="space-y-3">
+                      <div className="rounded-lg bg-gray-50 p-4"><div className="mb-2 text-xs font-medium text-gray-500">Call Summary</div><div className="text-sm leading-relaxed text-gray-900">{callSummary || 'No summary available'}</div></div>
+                      {actionItems.length > 0 && (
+                        <div className="rounded-r-lg border-l-4 border-[#4600f2] bg-[#4600f2]/5 p-4">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#4600f2]">Next Action Required</div>
+                          <ul className="space-y-1 text-sm leading-relaxed text-gray-900">{actionItems.map((it, i) => (<li key={i} className="flex items-start gap-2"><span className="mt-0 text-[#4600f2]">•</span><span>{it}</span></li>))}</ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* AI Performance Analysis */}
+              <div id="section-ai" className="space-y-3">
+                <SectionHeader label="AI Performance Analysis" icon={FaBolt} onCopy={() => copy(`AI Score: ${q.score || aiScore}/10\nWhat AI Did Well: ${(q.didWell || []).join(', ') || 'N/A'}\nAreas for Improvement: ${(q.improve || []).join(', ') || 'N/A'}`, 'ai')} isCopied={copied === 'ai'} />
+                <div className="rounded-lg border border-gray-200 bg-white p-5">
+                  <div className="mb-4 grid grid-cols-2 gap-4">
+                    <div><div className="mb-1 text-xs font-medium text-gray-500">Overall Score</div><div className={`text-lg font-semibold ${getScoreColor(aiScore)}`}>{q.score || aiScore} / 10</div></div>
+                    {q.relevanceClarity != null && (<div><div className="mb-1 text-xs font-medium text-gray-500">Relevance & Clarity</div><div className="text-lg font-semibold text-green-600">{q.relevanceClarity} / 10</div></div>)}
+                  </div>
+                  {q.didWell?.length > 0 && (
+                    <div className="mb-4 rounded-r-lg border-l-4 border-green-500 bg-green-500/5 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-600">What AI Did Well</div>
+                      <ul className="space-y-1">{q.didWell.map((it, i) => (<li key={i} className="flex items-start gap-2 text-sm text-gray-900"><span className="mt-0 text-green-600">•</span><span>{it}</span></li>))}</ul>
+                    </div>
+                  )}
+                  {q.improve?.length > 0 && (
+                    <div className="rounded-r-lg border-l-4 border-orange-500 bg-orange-500/5 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-orange-600">Areas for Improvement</div>
+                      <ul className="space-y-1">{q.improve.map((it, i) => (<li key={i} className="flex items-start gap-2 text-sm text-gray-900"><span className="mt-0 text-orange-600">•</span><span>{it}</span></li>))}</ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Appointment */}
+              <div id="section-appointment" className="space-y-3">
+                <SectionHeader label="Appointment" icon={FaCalendar} onCopy={() => copy(`Appointment Scheduled: ${appt.scheduled ? 'Yes' : 'No'}\nType: ${appt.type || 'N/A'}\nDetails: ${(appt.details || []).join(', ') || 'N/A'}`, 'appointment')} isCopied={copied === 'appointment'} />
+                <div className="rounded-lg border border-gray-200 bg-white p-4">
+                  {appt.scheduled ? (
+                    <div className="grid grid-cols-3 gap-4">
+                      <div><div className="mb-1 text-xs font-medium text-gray-500">Type</div><div className="text-sm capitalize text-gray-900">{appt.type || 'N/A'}</div></div>
+                      <div><div className="mb-1 text-xs font-medium text-gray-500">Status</div><div className="text-sm font-medium text-green-600">Scheduled</div></div>
+                      {appt.details?.length > 0 && (<div><div className="mb-1 text-xs font-medium text-gray-500">Details</div><div className="text-sm text-gray-900">{appt.details[0]}</div></div>)}
+                    </div>
+                  ) : <div className="py-4 text-center"><p className="text-sm text-gray-500">No appointment scheduled</p></div>}
+                </div>
+              </div>
+
+              {/* Transcript */}
+              <div id="section-transcript" className="space-y-3">
+                <SectionHeader label={isMessaging ? 'Conversation' : 'Transcript'} icon={FaFileAlt} onCopy={() => copy(messages.map((m) => `[${fmtClock(m.atSec)}] ${m.role === 'agent' ? 'Agent' : 'Customer'}: ${m.text}`).join('\n'), 'transcript')} isCopied={copied === 'transcript'} />
+                <TranscriptTurns turns={messages} isMessaging={isMessaging} activeIndex={activeTranscriptIndex} scrollToMs={isMessaging ? scrollToMs : null} onSeek={seek} registerRef={(i, el) => { if (el) transcriptRefs.current.set(i, el); else transcriptRefs.current.delete(i) }} />
+              </div>
             </div>
           </>
-        )}
-
-        {/* SMS / chat conversation detail — rendered from inline smsMessages (no audio, no report tabs) */}
-        {!loading && !error && smsView && (
-          <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
-            {(smsView.summary) ? (
-              <div className="spyne-card flex flex-col gap-1.5 p-3.5">
-                <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Summary</p>
-                <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--spyne-text-secondary)' }}>{Array.isArray(smsView.summary) ? smsView.summary.join(' ') : smsView.summary}</p>
-              </div>
-            ) : null}
-            <MessageTurns messages={smsTurns(smsView)} isMessaging scrollToMs={scrollToMs} />
-          </div>
         )}
       </div>
     </div>

@@ -162,7 +162,8 @@ export function normalizeCallReport(raw: any) {
 
   // Appointment (report.overview.*).
   const appointment = {
-    scheduled: !!ovTop.appointmentScheduled,
+    // BE sends 'Yes'/'No' (or sometimes boolean) — only "Yes"/true counts as scheduled.
+    scheduled: ovTop.appointmentScheduled === true || ovTop.appointmentScheduled === "Yes",
     callbackScheduled: !!ovTop.callbackScheduled,
     type: ovTop.appointmentType || null,
     details: Array.isArray(ovTop.appointmentDetails) ? ovTop.appointmentDetails.map(asText).filter(Boolean) : [],
@@ -190,6 +191,7 @@ export function normalizeCallReport(raw: any) {
     messages,
     summaryPoints,
     summaryText: summaryPoints.join(" "),
+    analysisSummary: asText(cd?.analysis?.summary) || "", // prose "Call Summary" (separate from highlights)
     actionItems,
     customerName: rep?.customerDetails?.name ?? cd.name ?? null,
     customerMobile: rep?.customerDetails?.mobile ?? cd.mobile ?? null,
