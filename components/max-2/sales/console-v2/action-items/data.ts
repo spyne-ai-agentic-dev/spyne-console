@@ -41,6 +41,9 @@ export interface ActionItem {
   repeat_caller_count: number;
   last_observed_at: string;
   escalation_reason?: "aged_past_sla" | "repeat_caller_threshold" | "compliance_flagged";
+  // Source linkage (from the backend): the originating call + conversation for this item.
+  source_call_id?: string;
+  source_conversation_id?: string;
 }
 
 export const INTENT_TAXONOMY: Record<IntentId, IntentMeta> = {

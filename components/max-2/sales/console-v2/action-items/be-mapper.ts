@@ -86,6 +86,9 @@ export function mapBeItem(doc: any): ActionItem {
     repeat_caller_count: Number(meta.repeat_caller_count ?? 0),
     last_observed_at: meta.last_observed_at ?? doc?.updatedAt ?? createdAt,
     escalation_reason: meta.escalation_reason ?? (doc?.time_sensitive ? "aged_past_sla" : undefined),
+    // Source linkage — wire "Listen"/"Transcript" to the call + conversation.
+    source_call_id: meta.callSid ?? meta.call_id ?? meta.callId ?? undefined,
+    source_conversation_id: meta.conversationId ?? meta.conversation_id ?? meta.source_conversation_id ?? undefined,
   }
 }
 

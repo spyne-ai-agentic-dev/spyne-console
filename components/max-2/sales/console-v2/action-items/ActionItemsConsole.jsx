@@ -27,6 +27,18 @@ import {
   ageLabel, ageMinutes, isPastSla, slaBurnRatio, deptOf,
 } from './data'
 
+// Open the source call / conversation for an action item. In the iframe embed we can't
+// navigate the parent cross-origin, so we postMessage the host (converse-ai), which owns
+// navigation and can route to the call recording / conversation by id.
+function openCall(callId) {
+  if (!callId) return
+  try { window.parent?.postMessage({ type: 'spyne:open-call', callId }, '*') } catch {}
+}
+function openConversation(conversationId) {
+  if (!conversationId) return
+  try { window.parent?.postMessage({ type: 'spyne:open-conversation', conversationId }, '*') } catch {}
+}
+
 const INCORRECT_REASONS = [
   { value: 'wrong_intent', label: 'Wrong intent' },
   { value: 'not_a_task', label: 'Not a task' },
@@ -341,7 +353,7 @@ export function ActionItemsConsole({ readOnly = false, initialItems }) {
             {/* RIGHT detail */}
             <div className="flex flex-col gap-2.5">
               <SectionLabel glyph="task_alt" text="Open items" hint="resolve · assign · flag" />
-              <div className="spyne-card flex min-h-[420px] flex-col p-0">
+              <div className="spyne-card flex max-h-[calc(100vh-380px)] min-h-[420px] flex-col p-0">
               {activeItems.length === 0 ? (
                 <EmptyState
                   glyph="task_alt"
@@ -803,8 +815,8 @@ function ItemCard({ item, highlight, showCustomer, askingIncorrect, askingAssign
           <div className="flex items-center gap-2">
             <span className="text-[9.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--spyne-text-muted)' }}>Source</span>
             <div className="ml-auto flex items-center gap-1">
-              <button title="Recording playback — coming soon" className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
-              <button title="Full transcript — coming soon" className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg" style={{ color: 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
+              <button onClick={() => openCall(item.source_call_id)} disabled={!item.source_call_id} title={item.source_call_id ? `Listen to the call (${item.source_call_id})` : 'No call linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_call_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="play_circle" size={14} /> Listen</button>
+              <button onClick={() => openConversation(item.source_conversation_id)} disabled={!item.source_conversation_id} title={item.source_conversation_id ? `Open the conversation (${item.source_conversation_id})` : 'No conversation linked'} className="spyne-focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors hover:bg-spyne-page-bg disabled:cursor-not-allowed disabled:opacity-40" style={{ color: item.source_conversation_id ? 'var(--spyne-primary)' : 'var(--spyne-text-muted)' }}><MaterialSymbol name="notes" size={14} /> Transcript</button>
             </div>
           </div>
           <p className="mt-0.5 text-[12px] italic leading-snug" style={{ color: 'var(--spyne-text-muted)' }}>“{item.source_message}”</p>
