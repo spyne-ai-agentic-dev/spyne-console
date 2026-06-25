@@ -84,10 +84,14 @@ export async function fetchCallReport(callId: string): Promise<any | null> {
  *  Scoped to the embed's selected department (window.__AI_SCOPE__.department) so leads/conversations
  *  match the top-level department filter; falls back to the proxy default when unset. */
 export async function fetchConversations(customerId: string): Promise<{ conversations: any[]; summary: any }> {
-  const scope = (window as unknown as { __AI_SCOPE__?: { department?: string } }).__AI_SCOPE__
+  const scope = (window as unknown as { __AI_SCOPE__?: { department?: string; enterpriseId?: string; teamId?: string } }).__AI_SCOPE__
   const dept = scope?.department && scope.department !== "all" ? scope.department : undefined
   const url = new URL("/api/conversations", window.location.origin)
   url.searchParams.set("customerId", customerId)
+  // Enterprise/team are UI-driven (window.__AI_SCOPE__) — pass them so the drawer follows the
+  // entered rooftop, not the proxy's env defaults. Proxy falls back to env only when unset.
+  if (scope?.enterpriseId) url.searchParams.set("enterpriseId", scope.enterpriseId)
+  if (scope?.teamId) url.searchParams.set("teamId", scope.teamId)
   if (dept) url.searchParams.set("department", dept)
   const res = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
